@@ -64,14 +64,24 @@ function parseSheet(workbook: XLSX.WorkBook, sheetName: string): ParsedSheet {
   };
 }
 
-export async function parseWorkbook(file: File): Promise<ParsedWorkbook> {
-  const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
+export function parseWorkbookData(
+  fileName: string,
+  data: ArrayBuffer | Uint8Array,
+): ParsedWorkbook {
+  const workbook =
+    data instanceof Uint8Array
+      ? XLSX.read(data, { type: "buffer" })
+      : XLSX.read(data, { type: "array" });
 
   return {
-    fileName: file.name,
-    sourceRole: detectSourceRole(file.name),
-    dateToken: extractDateToken(file.name),
+    fileName,
+    sourceRole: detectSourceRole(fileName),
+    dateToken: extractDateToken(fileName),
     sheets: workbook.SheetNames.map((sheetName) => parseSheet(workbook, sheetName)),
   };
+}
+
+export async function parseWorkbook(file: File): Promise<ParsedWorkbook> {
+  const buffer = await file.arrayBuffer();
+  return parseWorkbookData(file.name, buffer);
 }

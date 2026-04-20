@@ -6,10 +6,15 @@ import { buildDashboardState } from "@/features/dashboard/buildDashboardState";
 import { parseWorkbook } from "@/features/workbook/parseWorkbook";
 import type { DashboardState } from "@/types/dashboard";
 import type { CanonicalHolding } from "@/types/holdings";
+import type { ExposureRow, DistributionRow } from "@/types/metrics";
 import type { ParsedWorkbook } from "@/types/workbook";
 
-export function DashboardWorkbench() {
-  const [workbooks, setWorkbooks] = useState<ParsedWorkbook[]>([]);
+export function DashboardWorkbench({
+  initialWorkbooks = [],
+}: Readonly<{
+  initialWorkbooks?: ParsedWorkbook[];
+}>) {
+  const [workbooks, setWorkbooks] = useState<ParsedWorkbook[]>(initialWorkbooks);
   const [selectedHoldingId, setSelectedHoldingId] = useState<string>();
   const [error, setError] = useState<string>();
   const [isPending, startTransition] = useTransition();
@@ -67,24 +72,22 @@ export function DashboardWorkbench() {
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-800">
                 Opp Value Dashboard
               </p>
-              <h1 className="max-w-2xl text-4xl font-semibold tracking-tight text-slate-950 md:text-6xl">
-                Summary, attribution, and stock detail from your dated source files.
+              <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 md:text-6xl">
+                Summary dashboard, comparison views, attribution slices, and deeper stock detail.
               </h1>
               <p className="max-w-2xl text-base leading-8 text-slate-700 md:text-lg">
-                Upload the current portfolio workbook plus the dated PMHub,
-                PFV override, and TME files. The app will classify the sources,
-                refresh holdings, and rebuild comparison views around the latest
-                batch.
+                The dashboard now starts from the workbook files already checked
+                into `data/raw`. Upload is still available when you want to
+                replace that default batch with newer dated files.
               </p>
             </div>
 
             <label className="flex cursor-pointer flex-col gap-3 rounded-[1.5rem] border border-dashed border-emerald-700/35 bg-slate-950 p-6 text-slate-50 shadow-[0_18px_40px_rgba(15,23,42,0.22)] lg:w-[26rem]">
               <span className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-200">
-                Upload Source Files
+                Replace Source Files
               </span>
               <span className="text-sm leading-7 text-slate-300">
-                Drop in the main portfolio sheet and any dated refresh files.
-                The newest uploaded set becomes the active dashboard state.
+                Upload a newer batch any time. The dashboard will use the latest valid file for each source role.
               </span>
               <input
                 className="hidden"
@@ -109,14 +112,12 @@ export function DashboardWorkbench() {
         {!dashboardState ? (
           <section className="rounded-[1.75rem] border border-white/70 bg-white/75 p-8 shadow-[0_18px_50px_rgba(54,74,65,0.08)] backdrop-blur">
             <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-              Ready For Live Inputs
+              No Default Data Loaded
             </h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-700">
-              Start with the files you described:
-              `xUS Opp Value Portfolio Sheet.xlsx`,
-              `pmhub-report_*`,
-              `xUS Opp Value_pfv overide_*`,
-              and `xustme_*`.
+              The app should preload the checked-in files from `data/raw`. If
+              you still see this state, there was a server-side load issue and
+              I need to fix that path next.
             </p>
           </section>
         ) : (
@@ -124,12 +125,12 @@ export function DashboardWorkbench() {
             <section className="grid gap-6 lg:grid-cols-[1.25fr_1fr]">
               <Panel
                 title="Refresh Summary"
-                description="The app classifies each uploaded file into a source role and uses that set to rebuild the current dashboard state."
+                description="The active dashboard uses the latest file per role from the default batch or from whatever you most recently uploaded."
               >
                 <div className="grid gap-4 md:grid-cols-2">
                   {dashboardState.sources.map((source) => (
                     <article
-                      key={source.fileName}
+                      key={`${source.role}-${source.fileName}`}
                       className="rounded-[1.1rem] border border-slate-200 bg-slate-50/80 p-4"
                     >
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-800">
@@ -139,7 +140,7 @@ export function DashboardWorkbench() {
                         {source.fileName}
                       </p>
                       <p className="mt-2 text-sm leading-6 text-slate-700">
-                        Date token: {source.dateToken ?? "not detected"}
+                        Active date: {source.dateLabel ?? source.dateToken ?? "not detected"}
                       </p>
                       <p className="text-sm leading-6 text-slate-700">
                         Sheets: {source.sheetCount}
@@ -151,7 +152,7 @@ export function DashboardWorkbench() {
 
               <Panel
                 title="Summary Metrics"
-                description="First-pass summary dashboard matching the current workbook structure while setting up room for deeper comparisons."
+                description="Core portfolio summary aligned with the current workbook, plus valuation and data-completeness checks."
               >
                 <div className="grid gap-4 sm:grid-cols-2">
                   <MetricCard label="As Of" value={dashboardState.asOfLabel ?? "Current batch"} />
@@ -172,6 +173,14 @@ export function DashboardWorkbench() {
                     label="Weighted ROE"
                     value={formatPercent(dashboardState.summary.weightedRoe, 1)}
                   />
+                  <MetricCard
+                    label="Weighted PFV"
+                    value={formatNumber(dashboardState.summary.weightedPriceToFairValue)}
+                  />
+                  <MetricCard
+                    label="Missing Metrics"
+                    value={String(dashboardState.summary.missingMetricCount)}
+                  />
                 </div>
               </Panel>
             </section>
@@ -179,26 +188,92 @@ export function DashboardWorkbench() {
             <section className="grid gap-6 lg:grid-cols-2">
               <Panel
                 title="Sector Comparison"
-                description="Portfolio, benchmark, and TME exposure rollups to anchor future attribution charts."
+                description="Portfolio, benchmark, and TME sector exposure in one place."
               >
-                <div className="grid gap-4">
-                  {dashboardState.sectorExposure.slice(0, 10).map((row) => (
-                    <div key={row.sector} className="grid gap-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium text-slate-900">{row.sector}</span>
-                        <span className="text-slate-600">
-                          {formatPercent(row.portfolioWeight)} portfolio
+                <ExposureList rows={dashboardState.sectorExposure.slice(0, 10)} />
+              </Panel>
+
+              <Panel
+                title="Country Comparison"
+                description="Country-level active weights to complement the sector view."
+              >
+                <ExposureList rows={dashboardState.countryExposure.slice(0, 10)} />
+              </Panel>
+            </section>
+
+            <section className="grid gap-6 lg:grid-cols-3">
+              <Panel
+                title="Attribution Leaders"
+                description="Largest active positions versus benchmark."
+              >
+                <RankedList
+                  title="Top Overweights"
+                  holdings={dashboardState.topActivePositions}
+                  metric={(holding) => formatPercent(holding.activeWeightVsBenchmark)}
+                />
+              </Panel>
+
+              <Panel
+                title="Attribution Drag"
+                description="Largest underweights versus benchmark."
+              >
+                <RankedList
+                  title="Top Underweights"
+                  holdings={dashboardState.topUnderweights}
+                  metric={(holding) => formatPercent(holding.activeWeightVsBenchmark)}
+                />
+              </Panel>
+
+              <Panel
+                title="Valuation Upside"
+                description="Names with the highest upside-to-fair-value signal from the integrated dataset."
+              >
+                <RankedList
+                  title="Top Upside"
+                  holdings={dashboardState.topUpsidePositions}
+                  metric={(holding) => formatPercent(holding.upsideToFairValue)}
+                />
+              </Panel>
+            </section>
+
+            <section className="grid gap-6 lg:grid-cols-2">
+              <Panel
+                title="PFV Distribution"
+                description="How portfolio weight is distributed across valuation buckets relative to the TME comparison layer."
+              >
+                <DistributionList rows={dashboardState.pfvDistribution} />
+              </Panel>
+
+              <Panel
+                title="Moat Distribution"
+                description="Portfolio moat mix compared with the uploaded TME reference weights."
+              >
+                <DistributionList rows={dashboardState.moatDistribution} />
+              </Panel>
+            </section>
+
+            <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+              <Panel
+                title="Sector Valuation Spread"
+                description="Weighted PFV by sector, useful for seeing where the portfolio is cheap or expensive versus its current structure."
+              >
+                <div className="grid gap-3">
+                  {dashboardState.valuationBySector.map((row) => (
+                    <div
+                      key={row.sector}
+                      className="grid gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/80 px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-950">
+                          {row.sector}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          BM {formatPercent(row.benchmarkWeight)}
                         </span>
                       </div>
-                      <BarRow
-                        primary={row.portfolioWeight}
-                        secondary={row.benchmarkWeight ?? 0}
-                        tertiary={row.modelWeight ?? 0}
-                      />
-                      <div className="flex justify-between text-xs text-slate-500">
-                        <span>BM {formatPercent(row.benchmarkWeight)}</span>
-                        <span>TME {formatPercent(row.modelWeight)}</span>
-                        <span>Active {formatPercent(row.activeVsBenchmark)}</span>
+                      <div className="grid gap-1 text-sm text-slate-700 sm:grid-cols-2">
+                        <span>Portfolio PFV: {formatNumber(row.portfolioPfv)}</span>
+                        <span>TME PFV: {formatNumber(row.modelPfv)}</span>
                       </div>
                     </div>
                   ))}
@@ -206,21 +281,14 @@ export function DashboardWorkbench() {
               </Panel>
 
               <Panel
-                title="Comparison And Attribution"
-                description="A first working slice of the richer comparison and attribution views you asked for."
+                title="Benchmark Concentration"
+                description="Largest benchmark names in the merged dataset, useful for spotting where active gaps come from."
               >
-                <div className="grid gap-6">
-                  <RankedList
-                    title="Largest Active Weight vs Benchmark"
-                    holdings={dashboardState.topActivePositions}
-                    metric={(holding) => formatPercent(holding.activeWeightVsBenchmark)}
-                  />
-                  <RankedList
-                    title="Largest Benchmark Constituents"
-                    holdings={dashboardState.topBenchmarkGaps}
-                    metric={(holding) => formatPercent(holding.benchmarkWeight)}
-                  />
-                </div>
+                <RankedList
+                  title="Largest Benchmark Weights"
+                  holdings={dashboardState.topBenchmarkGaps}
+                  metric={(holding) => formatPercent(holding.benchmarkWeight)}
+                />
               </Panel>
             </section>
 
@@ -230,9 +298,9 @@ export function DashboardWorkbench() {
                 description="A deeper inspection panel for one holding at a time."
               >
                 <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-                  <div className="max-h-[36rem] overflow-y-auto rounded-[1.25rem] border border-slate-200 bg-slate-50/75 p-3">
+                  <div className="max-h-[40rem] overflow-y-auto rounded-[1.25rem] border border-slate-200 bg-slate-50/75 p-3">
                     <div className="grid gap-2">
-                      {dashboardState.holdings.slice(0, 40).map((holding) => (
+                      {dashboardState.holdings.slice(0, 60).map((holding) => (
                         <button
                           key={holding.canonicalId}
                           type="button"
@@ -245,7 +313,8 @@ export function DashboardWorkbench() {
                         >
                           <p className="text-sm font-semibold">{holding.securityName}</p>
                           <p className="mt-1 text-xs opacity-80">
-                            {holding.ticker ?? "No ticker"} •{" "}
+                            {holding.ticker ?? "No ticker"} |{" "}
+                            {holding.country ?? "No country"} |{" "}
                             {formatPercent(holding.targetWeight ?? holding.driftedWeight)}
                           </p>
                         </button>
@@ -255,18 +324,13 @@ export function DashboardWorkbench() {
 
                   {selectedHolding ? (
                     <StockDetailCard holding={selectedHolding} />
-                  ) : (
-                    <div className="rounded-[1.25rem] border border-slate-200 bg-white/80 p-5 text-sm text-slate-600">
-                      Select a holding to inspect its source-weight, valuation,
-                      benchmark comparison, and override coverage.
-                    </div>
-                  )}
+                  ) : null}
                 </div>
               </Panel>
 
               <Panel
                 title="Data Quality"
-                description="Issues are kept visible so the dashboard does not hide missing or partial inputs."
+                description="Issues stay visible so the dashboard does not hide missing or partial inputs."
               >
                 <div className="grid gap-3">
                   {dashboardState.issues.length > 0 ? (
@@ -333,6 +397,62 @@ function MetricCard({ label, value }: Readonly<{ label: string; value: string }>
   );
 }
 
+function ExposureList({ rows }: Readonly<{ rows: ExposureRow[] }>) {
+  return (
+    <div className="grid gap-4">
+      {rows.map((row) => (
+        <div key={row.label} className="grid gap-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-medium text-slate-900">{row.label}</span>
+            <span className="text-slate-600">
+              {formatPercent(row.portfolioWeight)} portfolio
+            </span>
+          </div>
+          <BarRow
+            primary={row.portfolioWeight}
+            secondary={row.benchmarkWeight ?? 0}
+            tertiary={row.modelWeight ?? 0}
+          />
+          <div className="flex justify-between text-xs text-slate-500">
+            <span>BM {formatPercent(row.benchmarkWeight)}</span>
+            <span>TME {formatPercent(row.modelWeight)}</span>
+            <span>Active {formatPercent(row.activeVsBenchmark)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DistributionList({ rows }: Readonly<{ rows: DistributionRow[] }>) {
+  const max = Math.max(
+    ...rows.flatMap((row) => [row.portfolioWeight, row.comparisonWeight ?? 0]),
+    0.01,
+  );
+
+  return (
+    <div className="grid gap-3">
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className="rounded-[1rem] border border-slate-200 bg-slate-50/80 px-4 py-3"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-950">{row.label}</span>
+            <span className="text-xs text-slate-500">
+              {formatPercent(row.portfolioWeight)} | TME {formatPercent(row.comparisonWeight)}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2">
+            <Bar color="bg-slate-950" value={row.portfolioWeight} max={max} />
+            <Bar color="bg-emerald-600" value={row.comparisonWeight ?? 0} max={max} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function BarRow({
   primary,
   secondary,
@@ -362,7 +482,7 @@ function Bar({
   value: number;
   max: number;
 }>) {
-  const width = `${Math.max((value / max) * 100, 3)}%`;
+  const width = `${Math.max((value / max) * 100, value > 0 ? 3 : 0)}%`;
 
   return (
     <div className="h-2 rounded-full bg-slate-200">
@@ -395,7 +515,9 @@ function RankedList({
               <p className="text-sm font-semibold text-slate-950">
                 {holding.securityName}
               </p>
-              <p className="text-xs text-slate-500">{holding.ticker ?? "No ticker"}</p>
+              <p className="text-xs text-slate-500">
+                {holding.ticker ?? "No ticker"} | {holding.sector ?? "No sector"}
+              </p>
             </div>
             <p className="text-sm font-semibold text-slate-700">{metric(holding)}</p>
           </div>
@@ -415,24 +537,27 @@ function StockDetailCard({ holding }: Readonly<{ holding: CanonicalHolding }>) {
         {holding.securityName}
       </h3>
       <p className="mt-2 text-sm text-slate-600">
-        {holding.ticker ?? "No ticker"} • {holding.isin ?? "No ISIN"} •{" "}
-        {holding.sector ?? "No sector"}
+        {holding.ticker ?? "No ticker"} | {holding.isin ?? "No ISIN"} |{" "}
+        {holding.country ?? "No country"} | {holding.sector ?? "No sector"}
       </p>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <Detail label="Target Weight" value={formatPercent(holding.targetWeight)} />
         <Detail label="Drifted Weight" value={formatPercent(holding.driftedWeight)} />
-        <Detail
-          label="Benchmark Weight"
-          value={formatPercent(holding.benchmarkWeight)}
-        />
+        <Detail label="Benchmark Weight" value={formatPercent(holding.benchmarkWeight)} />
         <Detail label="TME Weight" value={formatPercent(holding.modelWeight)} />
         <Detail label="Active vs BM" value={formatPercent(holding.activeWeightVsBenchmark)} />
+        <Detail label="Active vs TME" value={formatPercent(holding.activeWeightVsModel)} />
         <Detail label="PFV" value={formatNumber(holding.priceToFairValue)} />
+        <Detail label="Upside" value={formatPercent(holding.upsideToFairValue)} />
         <Detail label="Forward PE" value={formatNumber(holding.forwardPE)} />
         <Detail label="ROE" value={formatPercent(holding.roe, 1)} />
         <Detail label="P/B" value={formatNumber(holding.priceToBook)} />
+        <Detail label="Moat" value={holding.moat ?? "n/a"} />
         <Detail label="Uncertainty" value={holding.uncertainty ?? "n/a"} />
+        <Detail label="1M Return" value={formatPercent(holding.oneMonthReturn)} />
+        <Detail label="YTD Return" value={formatPercent(holding.ytdReturn)} />
+        <Detail label="Price" value={formatNumber(holding.price)} />
       </div>
 
       <div className="mt-5">
