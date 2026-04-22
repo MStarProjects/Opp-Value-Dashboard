@@ -1,5 +1,6 @@
 export interface MorningstarEnrichmentRecord {
   identifier: {
+    canonicalId?: string;
     isin?: string;
     cusip?: string;
     sedol?: string;
@@ -8,6 +9,9 @@ export interface MorningstarEnrichmentRecord {
     securityName?: string;
   };
   benchmarkWeight?: number;
+  benchmarkMatchMethod?: string;
+  usedBenchmarkFallbackMetrics?: boolean;
+  isCashLike?: boolean;
   priceToFairValue?: number;
   moat?: string;
   uncertainty?: string;
@@ -29,6 +33,12 @@ export interface MorningstarEnrichmentAudit {
   unmatchedHoldings: number;
   workbookFallbackRows: number;
   benchmarkConstituentCount: number;
+  benchmarkMatchedExactly?: number;
+  benchmarkMatchedByEquivalent?: number;
+  offBenchmarkRows?: number;
+  cashLikeRows?: number;
+  benchmarkFallbackMetricRows?: number;
+  adrOverrideRows?: number;
   notes: string[];
 }
 

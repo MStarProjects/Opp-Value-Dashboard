@@ -32,7 +32,9 @@ async function loadDefaultPortfolioWorkbook() {
 
 export default async function Home() {
   const initialWorkbooks = await loadDefaultPortfolioWorkbook();
-  const initialState = await buildDashboardState(initialWorkbooks);
+  const initialState = await buildDashboardState(initialWorkbooks, {
+    preferStubEnrichment: true,
+  });
 
   return <DashboardWorkbench initialState={initialState} />;
 }

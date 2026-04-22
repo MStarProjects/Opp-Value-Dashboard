@@ -147,6 +147,7 @@ function findHolding(
   record: MorningstarEnrichmentRecord,
 ): CanonicalHolding | undefined {
   const keys = [
+    normalizeIdentifier(record.identifier.canonicalId),
     normalizeIdentifier(record.identifier.isin),
     normalizeIdentifier(record.identifier.ticker),
     normalizeIdentifier(record.identifier.securityName),
@@ -176,6 +177,9 @@ function applyMorningstarEnrichment(
     holding.priceToBook = record.priceToBook ?? holding.priceToBook;
     holding.sector = record.sector ?? holding.sector;
     holding.country = record.country ?? holding.country;
+    if (record.benchmarkMatchMethod) {
+      holding.matchMethod = record.benchmarkMatchMethod;
+    }
   }
 }
 
@@ -241,6 +245,9 @@ function selectPortfolioSheet(workbook?: ParsedWorkbook) {
 
 export async function buildDashboardState(
   rawWorkbooks: ParsedWorkbook[],
+  options?: {
+    preferStubEnrichment?: boolean;
+  },
 ): Promise<DashboardState> {
   const workbooks = pickLatestWorkbooksByRole(rawWorkbooks);
   const portfolioWorkbook = selectPortfolioWorkbook(workbooks);
@@ -295,7 +302,9 @@ export async function buildDashboardState(
 
   const workbookRows = mapWorkbookRows(portfolioSheet);
   const weightedHoldings = workbookRows.filter((holding) => (holding.targetWeight ?? 0) > 0);
-  const enrichment = await enrichPortfolioHoldings(weightedHoldings);
+  const enrichment = await enrichPortfolioHoldings(weightedHoldings, {
+    preferStub: options?.preferStubEnrichment,
+  });
   applyMorningstarEnrichment(weightedHoldings, enrichment.records);
   const finalizedHoldings = finalizeHoldings(weightedHoldings);
   const issues = detectHoldingIssues(finalizedHoldings);

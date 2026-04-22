@@ -41,6 +41,12 @@ export interface EnrichmentAudit {
   unmatchedHoldings: number;
   workbookFallbackRows: number;
   benchmarkConstituentCount: number;
+  benchmarkMatchedExactly?: number;
+  benchmarkMatchedByEquivalent?: number;
+  offBenchmarkRows?: number;
+  cashLikeRows?: number;
+  benchmarkFallbackMetricRows?: number;
+  adrOverrideRows?: number;
   notes: string[];
 }
 

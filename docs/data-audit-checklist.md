@@ -40,6 +40,10 @@ A batch is ready only when the monthly PMHub workbook is parsed cleanly and ever
 - benchmark weights are attached to matched securities when applicable
 - securities not in the benchmark are not treated as match failures if Morningstar security enrichment still succeeds
 - missing benchmark weight is informational for off-benchmark holdings
+- cash and currency rows are allowed to carry `0` benchmark weight without being treated as match failures
+- ADR/local-share pairs are matched onto the same portfolio row when a reliable issuer-equivalent benchmark constituent exists
+- benchmark-local fallback metrics are only used when the portfolio-held security is missing the Direct field
+- Securities whose `Business Country` is Brazil or Mexico are allowed to use ADR overrides for `PFV`, `Moat`, and `Forward P/E` when those fields are missing on the local line
 
 ## Fundamental Field Checks
 - `PFV`
@@ -77,3 +81,9 @@ A batch is ready only when the monthly PMHub workbook is parsed cleanly and ever
 - rows enriched from API
 - rows using workbook fallback fields
 - unmatched rows
+- exact benchmark matches
+- ADR/local-share benchmark equivalent matches
+- cash/currency rows ignored for benchmark matching
+- off-benchmark rows with explicit `0` benchmark weight
+- rows that used benchmark-local fallback metrics
+- rows that used Brazil/Mexico ADR overrides

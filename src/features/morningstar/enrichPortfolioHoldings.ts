@@ -41,6 +41,12 @@ function buildStubResult(
       unmatchedHoldings: holdings.length,
       workbookFallbackRows,
       benchmarkConstituentCount: 0,
+      benchmarkMatchedExactly: 0,
+      benchmarkMatchedByEquivalent: 0,
+      offBenchmarkRows: 0,
+      cashLikeRows: 0,
+      benchmarkFallbackMetricRows: 0,
+      adrOverrideRows: 0,
       notes: [
         "PMHub monthly holdings workbook is now the base input.",
         "Morningstar Data SDK is the recommended integration path.",
@@ -54,16 +60,28 @@ function buildStubResult(
 
 export async function enrichPortfolioHoldings(
   holdings: CanonicalHolding[],
+  options?: {
+    preferStub?: boolean;
+  },
 ): Promise<MorningstarEnrichmentResult> {
+  if (options?.preferStub) {
+    return buildStubResult(holdings, [
+      "Initial page render is using workbook-first mode so the dashboard opens immediately.",
+    ]);
+  }
+
   if (typeof window !== "undefined") {
     return buildStubResult(holdings, [
       "Client-side parsing uses stubbed enrichment. Run SDK-backed enrichment on the server or through the local Python bridge.",
     ]);
   }
 
-  if (process.env.MORNINGSTAR_ENABLE_SDK !== "true") {
+  const { readMorningstarSessionToken } = await import("@/lib/morningstar-session");
+  const hasSavedToken = Boolean(await readMorningstarSessionToken());
+
+  if (process.env.MORNINGSTAR_ENABLE_SDK !== "true" && !hasSavedToken) {
     return buildStubResult(holdings, [
-      "Set MORNINGSTAR_ENABLE_SDK=true to enable the Python SDK bridge.",
+      "Save a Morningstar token in the app or set MORNINGSTAR_ENABLE_SDK=true to enable the Python SDK bridge.",
     ]);
   }
 

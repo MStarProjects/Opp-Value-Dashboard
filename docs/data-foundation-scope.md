@@ -66,6 +66,11 @@ Before dashboard layout, charts, or app polish, we are defining the canonical co
 - Missing `PFV` is allowed.
 - A security can be fully matched and enriched even if it is not in the benchmark.
 - Benchmark membership is separate from Morningstar security enrichment.
+- Cash and currency rows are allowed and should not be treated as benchmark match failures.
+- ADR and local-line equivalents should stay on the same portfolio row.
+- For ADR or local-line mismatches, use the portfolio-held security's Direct metrics first; if Direct is missing a metric there, fall back to the benchmark local-line security.
+- True off-benchmark names should carry `benchmarkWeight = 0` while still receiving Morningstar enrichment from `ISIN` or `Ticker`.
+- For securities whose `Business Country` resolves to Brazil or Mexico, if the local line does not carry `PFV`, `Moat`, or `Forward P/E`, automatically look up the ADR sibling and use that as a metric override.
 
 ## What Will Be Built First
 1. PMHub workbook parser

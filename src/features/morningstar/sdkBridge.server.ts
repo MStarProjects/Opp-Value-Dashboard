@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import { pmhubWorkbookContract } from "@/lib/pmhub-workbook-contract";
+import { readMorningstarSessionToken } from "@/lib/morningstar-session";
 import type { CanonicalHolding } from "@/types/holdings";
 import type { MorningstarEnrichmentResult } from "@/types/morningstar";
 
@@ -9,6 +10,8 @@ interface MorningstarBridgePayloadHolding {
   canonicalId: string;
   securityName: string;
   isin?: string;
+  cusip?: string;
+  sedol?: string;
   ticker?: string;
 }
 
@@ -26,6 +29,8 @@ function buildBridgePayload(holdings: CanonicalHolding[]): MorningstarBridgePayl
       canonicalId: holding.canonicalId,
       securityName: holding.securityName,
       isin: holding.isin,
+      cusip: holding.cusip,
+      sedol: holding.sedol,
       ticker: holding.ticker,
     })),
   };
@@ -37,12 +42,16 @@ export async function runMorningstarSdkEnrichment(
   const pythonExecutable = process.env.MORNINGSTAR_PYTHON_PATH || "python";
   const scriptPath = path.join(process.cwd(), "scripts", "morningstar_sdk_bridge.py");
   const payload = JSON.stringify(buildBridgePayload(holdings));
+  const savedToken = await readMorningstarSessionToken();
+  const shouldEnableSdk = process.env.MORNINGSTAR_ENABLE_SDK === "true" || Boolean(savedToken);
 
   return new Promise((resolve, reject) => {
     const child = spawn(pythonExecutable, [scriptPath], {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        ...(savedToken ? { MD_AUTH_TOKEN: savedToken } : {}),
+        MORNINGSTAR_ENABLE_SDK: shouldEnableSdk ? "true" : process.env.MORNINGSTAR_ENABLE_SDK,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

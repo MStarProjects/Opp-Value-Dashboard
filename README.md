@@ -22,6 +22,12 @@ This repo is currently focused on getting the Opp Value data contract right befo
 - `docs/data-foundation-scope.md`
 - `docs/data-audit-checklist.md`
 
+## Opening The App
+- double-click `Open Opp Value Dashboard.vbs` to start the local server and open the dashboard in your browser
+- if you prefer to see the server window, double-click `Open Opp Value Dashboard.cmd`
+- the app opens at `http://127.0.0.1:3000`
+- paste the current Morningstar token into the token box in the app when the daily token changes
+
 ## Morningstar SDK Wiring
 - preferred integration path: Python `morningstar_data` SDK
 - benchmark investment id: `MGXTMENU`
