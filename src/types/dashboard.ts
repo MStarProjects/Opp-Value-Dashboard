@@ -15,6 +15,35 @@ export interface SourceSnapshot {
   sheetCount: number;
 }
 
+export interface DataAuditSummary {
+  parsedWorkbookRows: number;
+  parsedHoldingRows: number;
+  weightedHoldingRows: number;
+  duplicateIsinCount: number;
+  duplicateTickerCount: number;
+  rowsMissingIsin: number;
+  rowsMissingTicker: number;
+  currencyContributionCoverageCount: number;
+  workbookFallbackCoverageCount: number;
+  apiReadyByIsinCount: number;
+  apiFallbackTickerCount: number;
+  apiMatchedCount: number;
+}
+
+export interface EnrichmentAudit {
+  provider: "morningstar-internal-api";
+  status: "stubbed" | "configured";
+  benchmarkInvestmentId?: string;
+  directDataSetIdOrName?: string;
+  requestedFieldGroups: string[];
+  matchedByIsin: number;
+  matchedByTicker: number;
+  unmatchedHoldings: number;
+  workbookFallbackRows: number;
+  benchmarkConstituentCount: number;
+  notes: string[];
+}
+
 export interface DashboardState {
   asOfLabel?: string;
   sources: SourceSnapshot[];
@@ -28,7 +57,7 @@ export interface DashboardState {
     sector: string;
     portfolioPfv?: number;
     benchmarkWeight?: number;
-    modelPfv?: number;
+    apiPfv?: number;
   }>;
   topActivePositions: CanonicalHolding[];
   topUnderweights: CanonicalHolding[];
@@ -36,4 +65,6 @@ export interface DashboardState {
   topUpsidePositions: CanonicalHolding[];
   stockDetail?: CanonicalHolding;
   issues: ReconciliationIssue[];
+  audit: DataAuditSummary;
+  enrichmentAudit: EnrichmentAudit;
 }

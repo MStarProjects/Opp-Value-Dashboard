@@ -21,6 +21,8 @@ export interface ParsedSheet {
   headers: string[];
   normalizedHeaders: string[];
   rows: ParsedSheetRow[];
+  headerRowIndex: number;
+  dataStartRowIndex: number;
 }
 
 export type ParsedSheetRow = Record<string, string | number | null>;

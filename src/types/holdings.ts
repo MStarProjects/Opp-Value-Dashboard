@@ -12,6 +12,7 @@ export interface CanonicalHolding {
   sector?: string;
   industry?: string;
   moat?: string;
+  currencyContribution?: number;
   targetWeight?: number;
   driftedWeight?: number;
   benchmarkWeight?: number;

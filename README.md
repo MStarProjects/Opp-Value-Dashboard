@@ -1,52 +1,38 @@
 # Opp Value Dashboard
 
-Next.js dashboard for client-side workbook reconciliation, comparison views, attribution framing, and stock-level detail for the `xUS Opp Value` workflow.
+This repo is currently focused on getting the Opp Value data contract right before any more dashboard work.
 
-## Current State
-- Next.js App Router scaffolded with TypeScript and Tailwind CSS.
-- Multi-file Excel upload implemented with `xlsx`.
-- Source-role detection added for:
-  - portfolio workbook
-  - PMHub holdings
-  - PFV override
-  - TME reference
-- First working dashboard includes:
-  - refresh summary
-  - top-level KPIs
-  - sector comparison
-  - attribution-style ranked views
-  - stock-level detail
-  - data quality panel
+## Current Scope
+- One monthly PMHub holdings workbook is the only required manual input.
+- Morningstar internal API will provide benchmark holdings, benchmark weights, and fundamental enrichment.
+- Data audit comes before UI polish.
 
-## Included Source Files
-Real workbook inputs are checked in under `data/raw/`:
-- `xUS Opp Value Portfolio Sheet.xlsx`
-- `pmhub-report_intl_opp value_42026.xlsx`
-- `xUS Opp Value_pfv overide_42026.xlsx`
-- `xustme_42026.xlsx`
+## Current Data Contract
+- workbook sheet: `Sheet A`
+- header row: `1`
+- data start row: `3`
+- row `2`: sleeve summary row, excluded from holdings parsing
+- official portfolio weight for v1: `Weight`
+- primary match key: `ISIN`
+- fallback match key: `Ticker`
+- benchmark investment id: `MGXTMENU`
+- Direct data set: `Global xUS Opp Value`
 
 ## Docs
-- `docs/implementation-plan.md`
-- `docs/initial-build-manual.md`
-- `docs/workbook-integration-plan.md`
+- `docs/data-foundation-scope.md`
+- `docs/data-audit-checklist.md`
 
-## Run Locally
-```bash
-npm install
-npm run dev
-```
+## Morningstar SDK Wiring
+- preferred integration path: Python `morningstar_data` SDK
+- benchmark investment id: `MGXTMENU`
+- saved Direct data set: `Global xUS Opp Value`
+- environment toggle: `MORNINGSTAR_ENABLE_SDK=true`
+- optional Python path override: `MORNINGSTAR_PYTHON_PATH`
+- preferred token env var: `MD_AUTH_TOKEN`
+- accepted alias for daily auth rotation: `MORNINGSTAR_API_TOKEN` (mapped into `MD_AUTH_TOKEN` by the Python bridge)
 
-Open [http://localhost:3000](http://localhost:3000).
-
-## Current Refresh Model
-1. Upload the main portfolio workbook and any dated companion files.
-2. The app classifies each file by role.
-3. Holdings are rebuilt from the current batch.
-4. PFV override and TME data enrich the stock-level dataset.
-5. Summary, comparison, and detail views refresh from the merged result.
-
-## Next Build Priorities
-1. Improve charting depth for attribution and comparison analysis.
-2. Add more robust field-level provenance and issue surfacing.
-3. Add explicit file-date ranking when multiple dated files are uploaded.
-4. Expand stock detail with more benchmark and reference comparisons.
+## Current Engineering Direction
+1. Parse the PMHub workbook exactly.
+2. Build an explicit audit around identifier quality and enrichment coverage.
+3. Use the Python SDK bridge to fetch latest benchmark holdings and Direct data-set enrichment.
+4. Revisit the app experience only after the data layer is trustworthy.

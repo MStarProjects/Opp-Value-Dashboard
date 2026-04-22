@@ -1,10 +1,8 @@
 import type { ParsedWorkbook } from "@/types/workbook";
 
 export type SourceRole =
-  | "portfolio_workbook"
-  | "pmhub_holdings"
-  | "pfv_override"
-  | "tme_reference"
+  | "pmhub_portfolio"
+  | "presentation_example"
   | "unknown";
 
 export interface SourceDescriptor {
@@ -17,54 +15,18 @@ export interface SourceDescriptor {
 
 export const sourceDescriptors: SourceDescriptor[] = [
   {
-    role: "portfolio_workbook",
-    label: "Portfolio Workbook",
+    role: "pmhub_portfolio",
+    label: "PMHub Portfolio",
+    filenamePatterns: [/^pmhub-report_/i],
+    description:
+      "Owned monthly PMHub holdings workbook used as the portfolio input.",
+  },
+  {
+    role: "presentation_example",
+    label: "Presentation Example",
     filenamePatterns: [/portfolio sheet/i],
     description:
-      "Main integrated workbook used today for portfolio metrics, holdings, CRIMs, overrides, and algo views.",
-  },
-  {
-    role: "pmhub_holdings",
-    label: "PMHub Holdings",
-    filenamePatterns: [/^pmhub-report_/i],
-    requiredHeaders: [
-      "ticker",
-      "security name",
-      "isin",
-      "weight",
-      "roe",
-      "pe fy1",
-      "price/bk",
-    ],
-    description:
-      "Dated PMHub holdings and financial metric snapshot used as the current holdings backbone.",
-  },
-  {
-    role: "pfv_override",
-    label: "PFV Override",
-    filenamePatterns: [/pfv/i, /override/i],
-    requiredHeaders: [
-      "name",
-      "ticker",
-      "price to fair value",
-      "fair value uncertainty",
-    ],
-    description:
-      "Dated override file used to enrich or replace valuation-related stock fields.",
-  },
-  {
-    role: "tme_reference",
-    label: "TME Reference",
-    filenamePatterns: [/tme/i],
-    requiredHeaders: [
-      "name",
-      "ticker",
-      "portfolio weighting %",
-      "economic moat",
-      "price to fair value",
-    ],
-    description:
-      "Dated reference universe used for comparisons and attribution framing.",
+      "Legacy Excel workbook used as a layout reference for the eventual product output.",
   },
 ];
 
