@@ -18,6 +18,7 @@ interface MorningstarBridgePayloadHolding {
 interface MorningstarBridgePayload {
   benchmarkInvestmentId: string;
   directDataSetIdOrName: string;
+  includeBenchmarkHoldings: boolean;
   holdings: MorningstarBridgePayloadHolding[];
 }
 
@@ -25,6 +26,7 @@ function buildBridgePayload(holdings: CanonicalHolding[]): MorningstarBridgePayl
   return {
     benchmarkInvestmentId: pmhubWorkbookContract.benchmarkInvestmentId,
     directDataSetIdOrName: pmhubWorkbookContract.directDataSetIdOrName,
+    includeBenchmarkHoldings: true,
     holdings: holdings.map((holding) => ({
       canonicalId: holding.canonicalId,
       securityName: holding.securityName,

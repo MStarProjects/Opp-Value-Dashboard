@@ -5,6 +5,12 @@ import re
 import sys
 from typing import Any
 
+from join_override_rules import (
+    PFV_PE_OVERRIDE_RULES,
+    find_pfv_pe_override,
+    latest_metric_value,
+)
+
 
 def _normalize(name: str) -> str:
     return "".join(ch.lower() for ch in str(name).strip())
@@ -16,6 +22,14 @@ def _find_column(columns: list[str], candidates: list[str]) -> str | None:
         key = _normalize(candidate)
         if key in normalized:
             return normalized[key]
+        prefix_matches = [
+            column
+            for normalized_column, column in normalized.items()
+            if normalized_column.startswith(key)
+        ]
+        if prefix_matches:
+            prefix_matches.sort(key=len)
+            return prefix_matches[0]
     return None
 
 
@@ -65,27 +79,31 @@ def _is_cash_like_name(value: str | None) -> bool:
     if not value:
         return False
 
-    normalized = _normalize(value)
-    return any(
-        token in normalized
-        for token in [
-            "cash",
-            "currency",
-            "u.s.dollar",
-            "us.dollar",
-            "dollar",
-            "won",
-            "peso",
-            "pounds",
-            "sterling",
-            "euro",
-            "yen",
-            "krw",
-            "gbp",
-            "mxn",
-            "usd",
-        ]
-    )
+    normalized = _normalize(str(value or ""))
+    compact = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+    tokens = set(compact.split()) if compact else set()
+
+    if "cash" in tokens or "currency" in tokens:
+        return True
+
+    currency_tokens = {
+        "dollar",
+        "won",
+        "peso",
+        "pounds",
+        "sterling",
+        "euro",
+        "yen",
+        "krw",
+        "gbp",
+        "mxn",
+        "usd",
+    }
+    if tokens.intersection(currency_tokens):
+        return True
+
+    cash_patterns = ["cash_usd", "cash_gbp", "cash_mxn", "cash_krw", "pend_cash"]
+    return any(pattern in normalized for pattern in cash_patterns)
 
 
 def _is_cash_like_holding(holding: dict[str, Any]) -> bool:
@@ -118,6 +136,8 @@ _COMPANY_NAME_PATTERNS = [
 _KNOWN_DATA_SET_IDS = {
     "global xus opp value": "8467690",
 }
+
+_INVESTMENT_BATCH_SIZE = 500
 
 
 def _resolve_data_set_details(md: Any, data_set_name: str, notes: list[str]) -> tuple[Any, str]:
@@ -194,6 +214,26 @@ def _resolve_data_set_details(md: Any, data_set_name: str, notes: list[str]) -> 
     raise RuntimeError(
         f"Unable to resolve usable data set details for '{data_set_name}'. Attempted ids: {attempted_label}."
     )
+
+
+def _build_default_data_points(as_of_date: str) -> list[dict[str, Any]]:
+    return [
+        {"datapointId": "OS603", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "LT181", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "ST201", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "LA03Z"},
+        {"datapointId": "BC001"},
+        {"datapointId": "ST198", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "ST408", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "ST377"},
+    ]
+
+
+def _build_override_data_points(as_of_date: str) -> list[dict[str, Any]]:
+    return [
+        {"datapointId": "OS603"},
+        {"datapointId": "ST198"},
+    ]
 
 
 def _normalize_company_name(value: str | None) -> str:
@@ -278,9 +318,12 @@ def _country_allows_adr_override(value: Any) -> bool:
 
 
 def _build_lookup_identifier(InvestmentIdentifier: Any, row: dict[str, Any]) -> Any | None:
+    secid = _pick_value(row.get("secId"), row.get("SecId"))
     isin = _pick_value(row.get("ISIN"), row.get("isin"))
     ticker = _pick_value(row.get("Ticker"), row.get("ticker"))
 
+    if secid:
+        return str(secid)
     if isin:
         return InvestmentIdentifier(isin=str(isin))
     if ticker:
@@ -299,6 +342,49 @@ def _fetch_single_investment_row(
     )
     records = frame.to_dict(orient="records")
     return (records[0] if records else {}), list(frame.columns)
+
+
+def _fetch_investment_rows_batched(
+    md: Any, data_points: Any, identifiers: list[Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not identifiers:
+        return [], []
+
+    records: list[dict[str, Any]] = []
+    columns: list[str] = []
+    for index in range(0, len(identifiers), _INVESTMENT_BATCH_SIZE):
+        batch = identifiers[index : index + _INVESTMENT_BATCH_SIZE]
+        frame = md.direct.get_investment_data(
+            investments=batch,
+            data_points=data_points,
+            display_name=True,
+        )
+        if not columns:
+            columns = list(frame.columns)
+        records.extend(frame.to_dict(orient="records"))
+
+    return records, columns
+
+
+def _resolve_override_metric(
+    override_result: dict[str, Any] | None, field: str
+) -> tuple[Any, str | None]:
+    if not override_result:
+        return None, None
+
+    static_value = override_result.get(field)
+    if _has_value(static_value):
+        first_secid = override_result.get("secIds", [None])[0]
+        return static_value, (str(first_secid) if first_secid else None)
+
+    for secid in override_result.get("secIds", []):
+        metrics = override_result.get("metricsBySecId", {}).get(str(secid), {})
+        value = metrics.get(field)
+        if _has_value(value):
+            return value, str(secid)
+
+    first_secid = override_result.get("secIds", [None])[0]
+    return None, (str(first_secid) if first_secid else None)
 
 
 def _find_adr_lookup_candidate(
@@ -475,6 +561,48 @@ def main() -> int:
         latest_benchmark_date = max(str(record.get("date")) for record in benchmark_date_records)
         notes.append(f"Latest benchmark holdings date: {latest_benchmark_date}.")
 
+        if data_points is None:
+            data_points = _build_default_data_points(latest_benchmark_date)
+            notes.append(
+                "Using direct Morningstar datapoints for PFV, moat, uncertainty, sector, "
+                "business country, ROE, forward P/E, and price/book."
+            )
+
+        override_metrics_by_secid: dict[str, dict[str, Any]] = {}
+        override_secids = [
+            secid
+            for rule in PFV_PE_OVERRIDE_RULES
+            for secid in rule.get("secIds", [])
+            if secid
+        ]
+        if override_secids:
+            try:
+                override_records, _ = _fetch_investment_rows_batched(
+                    md,
+                    _build_override_data_points(latest_benchmark_date),
+                    override_secids,
+                )
+                for override_record in override_records:
+                    override_secid = str(override_record.get("Id") or "")
+                    if not override_secid:
+                        continue
+                    override_metrics_by_secid[override_secid] = {
+                        "priceToFairValue": latest_metric_value(
+                            override_record,
+                            "Price To Fair Value ",
+                        ),
+                        "forwardPE": latest_metric_value(
+                            override_record,
+                            "Forward Price To Earnings Ratio ",
+                        ),
+                    }
+                notes.append("Loaded explicit PFV/PE override metrics from the SecId override list.")
+            except Exception as exc:
+                notes.append(
+                    "Failed loading the explicit PFV/PE override SecIds; continuing without those explicit overrides. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
+
         benchmark_holdings = md.direct.get_holdings(
             investments=[resolved_benchmark_id],
             date=latest_benchmark_date,
@@ -517,17 +645,17 @@ def main() -> int:
         investment_records: list[dict[str, Any]] = []
         investment_columns: list[str] = []
         if investment_requests and data_points is not None:
-            investment_data = md.direct.get_investment_data(
-                investments=investment_requests,
-                data_points=data_points,
-                display_name=True,
-            )
-            investment_records = investment_data.to_dict(orient="records")
-            investment_columns = list(investment_data.columns)
-        elif investment_requests:
-            notes.append(
-                "Skipped Direct holding-level metric enrichment because no usable saved data set could be resolved."
-            )
+            try:
+                investment_records, investment_columns = _fetch_investment_rows_batched(
+                    md,
+                    data_points,
+                    investment_requests,
+                )
+            except Exception as exc:
+                notes.append(
+                    "Portfolio metric enrichment partially failed; continuing with benchmark matching and workbook fallbacks. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
 
         investment_row_by_canonical_id: dict[str, Any] = {}
         investment_record_index = 0
@@ -609,17 +737,17 @@ def main() -> int:
                 InvestmentIdentifier(isin=isin)
                 for isin in equivalent_request_by_benchmark_isin.keys()
             ]
-            benchmark_fallback_data = md.direct.get_investment_data(
-                investments=equivalent_benchmark_requests,
-                data_points=data_points,
-                display_name=True,
-            )
-            benchmark_fallback_records = benchmark_fallback_data.to_dict(orient="records")
-            benchmark_fallback_columns = list(benchmark_fallback_data.columns)
-        elif equivalent_request_by_benchmark_isin:
-            notes.append(
-                "Skipped benchmark local-line metric fallback because no usable saved data set could be resolved."
-            )
+            try:
+                benchmark_fallback_records, benchmark_fallback_columns = _fetch_investment_rows_batched(
+                    md,
+                    data_points,
+                    equivalent_benchmark_requests,
+                )
+            except Exception as exc:
+                notes.append(
+                    "Benchmark local-line fallback metric enrichment failed; continuing without those fallback metrics. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
 
         benchmark_fallback_by_isin: dict[str, Any] = {}
         for index, benchmark_isin in enumerate(equivalent_request_by_benchmark_isin.keys()):
@@ -660,8 +788,37 @@ def main() -> int:
                     benchmark_fallback_columns,
                     ["Business Country", "Country"],
                 ),
+                _pick_value(
+                    (benchmark_row or {}).get("country"),
+                    (benchmark_row or {}).get("Country"),
+                ),
             )
             adr_override_allowed = _country_allows_adr_override(resolved_country)
+            explicit_override_rule = find_pfv_pe_override(
+                security_name=_pick_value(
+                    requested.get("securityName"),
+                    _pick_value((benchmark_row or {}).get("name"), (benchmark_row or {}).get("Name")),
+                ),
+                ticker=requested.get("ticker"),
+                country=resolved_country,
+            )
+            explicit_override_result = None
+            if explicit_override_rule is not None:
+                explicit_override_result = {
+                    "label": explicit_override_rule.get("label"),
+                    "secIds": [str(secid) for secid in explicit_override_rule.get("secIds", [])],
+                    "priceToFairValue": explicit_override_rule.get("priceToFairValue"),
+                    "forwardPE": explicit_override_rule.get("forwardPE"),
+                    "metricsBySecId": override_metrics_by_secid,
+                }
+            price_to_fair_value_override, price_to_fair_value_override_secid = _resolve_override_metric(
+                explicit_override_result,
+                "priceToFairValue",
+            )
+            forward_pe_override, forward_pe_override_secid = _resolve_override_metric(
+                explicit_override_result,
+                "forwardPE",
+            )
 
             def ensure_adr_override_row() -> tuple[dict[str, Any], list[str]]:
                 nonlocal adr_override_row, adr_override_columns
@@ -701,11 +858,18 @@ def main() -> int:
                         adr_override_cache[normalized_search_name] = ({}, [])
                         continue
 
-                    adr_override_row, adr_override_columns = _fetch_single_investment_row(
-                        md,
-                        data_points,
-                        adr_identifier,
-                    )
+                    try:
+                        adr_override_row, adr_override_columns = _fetch_single_investment_row(
+                            md,
+                            data_points,
+                            adr_identifier,
+                        )
+                    except Exception as exc:
+                        notes.append(
+                            f"ADR override lookup failed for '{search_name}': {type(exc).__name__}: {exc}"
+                        )
+                        adr_override_cache[normalized_search_name] = ({}, [])
+                        continue
                     adr_override_cache[normalized_search_name] = (
                         adr_override_row,
                         adr_override_columns,
@@ -737,30 +901,39 @@ def main() -> int:
 
                 return None
 
-            price_to_fair_value = metric_value(
+            price_to_fair_value = _pick_value(
+                price_to_fair_value_override,
+                metric_value(
+                "Price To Fair Value",
                 "Price to Fair Value",
                 "P/FV",
                 "Price/Fair Value",
                 allow_adr_override=True,
+                ),
             )
             moat = metric_value("Economic Moat", "Moat", allow_adr_override=True)
             uncertainty = metric_value(
                 "Fair Value Uncertainty",
                 "Uncertainty",
             )
-            forward_pe = metric_value(
+            forward_pe = _pick_value(
+                forward_pe_override,
+                metric_value(
+                "Forward Price To Earnings Ratio",
                 "Forward Price/Earnings Ratio",
                 "Forward P/E",
                 "Forward PE",
                 allow_adr_override=True,
+                ),
             )
-            roe = metric_value("Return on Equity", "ROE")
+            roe = metric_value("Return On Equity-FY", "Return on Equity", "ROE")
             price_to_book = metric_value(
+                "Price To Book Ratio",
                 "Price/Book",
                 "Price to Book",
                 "P/B",
             )
-            sector = metric_value("Sector")
+            sector = metric_value("Morningstar Sector - display text", "Morningstar Sector", "Sector")
             country = metric_value("Business Country", "Country")
 
             records.append(
@@ -772,6 +945,32 @@ def main() -> int:
                         "sedol": requested.get("sedol"),
                         "ticker": requested.get("ticker"),
                         "securityName": requested.get("securityName"),
+                    },
+                    "matchedBenchmark": {
+                        "name": _pick_value(
+                            (benchmark_row or {}).get("name"),
+                            (benchmark_row or {}).get("Name"),
+                        ),
+                        "secId": _pick_value(
+                            (benchmark_row or {}).get("secId"),
+                            (benchmark_row or {}).get("SecId"),
+                        ),
+                        "isin": _pick_value(
+                            (benchmark_row or {}).get("isin"),
+                            (benchmark_row or {}).get("ISIN"),
+                        ),
+                        "cusip": _pick_value(
+                            (benchmark_row or {}).get("cusip"),
+                            (benchmark_row or {}).get("CUSIP"),
+                        ),
+                        "weight": _pick_value(
+                            _safe_value(
+                                benchmark_row or {},
+                                benchmark_columns,
+                                ["Weight", "Benchmark Weight", "Weighting"],
+                            ),
+                            0 if benchmark_match_method in {"off_benchmark", "cash_like"} else None,
+                        ),
                     },
                     "benchmarkWeight": _pick_value(
                         _safe_value(
@@ -788,6 +987,8 @@ def main() -> int:
                     "moat": moat,
                     "uncertainty": uncertainty,
                     "forwardPE": forward_pe,
+                    "pfvOverrideSecId": price_to_fair_value_override_secid,
+                    "forwardPEOverrideSecId": forward_pe_override_secid,
                     "roe": roe,
                     "priceToBook": price_to_book,
                     "sector": sector,
@@ -835,6 +1036,18 @@ def main() -> int:
                 "notes": notes,
             },
         }
+        if payload.get("includeBenchmarkHoldings"):
+            response["benchmarkHoldings"] = {
+                "latestDate": latest_benchmark_date,
+                "records": [
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if not str(key).startswith("_")
+                    }
+                    for row in benchmark_records
+                ],
+            }
 
         print(json.dumps(response, default=_json_default))
         return 0

@@ -22,6 +22,11 @@ export interface MorningstarEnrichmentRecord {
   country?: string;
 }
 
+export interface MorningstarBenchmarkHoldingsSnapshot {
+  latestDate?: string;
+  records: Array<Record<string, string | number | boolean | null>>;
+}
+
 export interface MorningstarEnrichmentAudit {
   provider: "morningstar-internal-api";
   status: "stubbed" | "configured";
@@ -45,4 +50,5 @@ export interface MorningstarEnrichmentAudit {
 export interface MorningstarEnrichmentResult {
   records: MorningstarEnrichmentRecord[];
   audit: MorningstarEnrichmentAudit;
+  benchmarkHoldings?: MorningstarBenchmarkHoldingsSnapshot;
 }

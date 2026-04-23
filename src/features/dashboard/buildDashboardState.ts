@@ -8,6 +8,13 @@ import { summarizePortfolio } from "@/features/calculations/portfolioMetrics";
 import { enrichPortfolioHoldings } from "@/features/morningstar/enrichPortfolioHoldings";
 import { detectHoldingIssues } from "@/features/reconciliation/issueDetection";
 import {
+  appendRetentionNote,
+  computeWorkbookHash,
+  describeRetainedSnapshot,
+  loadLatestConfiguredSnapshot,
+  persistRetentionSnapshot,
+} from "@/lib/data-retention";
+import {
   pmhubFieldAliases,
   pmhubWorkbookContract,
   type PmhubFieldKey,
@@ -243,15 +250,31 @@ function selectPortfolioSheet(workbook?: ParsedWorkbook) {
   );
 }
 
+interface DashboardRetentionOptions {
+  workbookBuffer?: Uint8Array;
+  allowRetentionFallback?: boolean;
+  persistSnapshots?: boolean;
+  snapshotReason?: string;
+}
+
 export async function buildDashboardState(
   rawWorkbooks: ParsedWorkbook[],
   options?: {
     preferStubEnrichment?: boolean;
+    retention?: DashboardRetentionOptions;
   },
 ): Promise<DashboardState> {
   const workbooks = pickLatestWorkbooksByRole(rawWorkbooks);
   const portfolioWorkbook = selectPortfolioWorkbook(workbooks);
   const portfolioSheet = selectPortfolioSheet(portfolioWorkbook);
+  const retentionOptions = options?.retention;
+  const workbookHash = retentionOptions?.workbookBuffer
+    ? computeWorkbookHash(retentionOptions.workbookBuffer)
+    : undefined;
+  const retainedSnapshot =
+    retentionOptions?.allowRetentionFallback && workbookHash
+      ? await loadLatestConfiguredSnapshot(workbookHash)
+      : undefined;
 
   if (!portfolioSheet || !portfolioWorkbook) {
     return {
@@ -300,6 +323,14 @@ export async function buildDashboardState(
     };
   }
 
+  if (options?.preferStubEnrichment && retainedSnapshot) {
+    return describeRetainedSnapshot(
+      retainedSnapshot.dashboardState,
+      retainedSnapshot.entry,
+      "Loaded the latest retained live snapshot instead of a fresh Morningstar pull.",
+    );
+  }
+
   const workbookRows = mapWorkbookRows(portfolioSheet);
   const weightedHoldings = workbookRows.filter((holding) => (holding.targetWeight ?? 0) > 0);
   const enrichment = await enrichPortfolioHoldings(weightedHoldings, {
@@ -319,7 +350,7 @@ export async function buildDashboardState(
     },
   ];
 
-  return {
+  let dashboardState: DashboardState = {
     asOfLabel: sources[0]?.dateLabel,
     sources,
     holdings: finalizedHoldings,
@@ -374,4 +405,40 @@ export async function buildDashboardState(
     },
     enrichmentAudit: enrichment.audit,
   };
+
+  if (retentionOptions?.persistSnapshots && retentionOptions.workbookBuffer) {
+    try {
+      const retentionEntry = await persistRetentionSnapshot({
+        parsedWorkbook: portfolioWorkbook,
+        workbookBuffer: retentionOptions.workbookBuffer,
+        dashboardState,
+        enrichment,
+        snapshotReason: retentionOptions.snapshotReason ?? "dashboard_refresh",
+      });
+
+      dashboardState = appendRetentionNote(
+        dashboardState,
+        enrichment.audit.status === "configured"
+          ? `Saved this PMHub workbook and Morningstar pull into the local retention store for ${retentionEntry.snapshotDate}.`
+          : `Saved this PMHub workbook into the local retention store for ${retentionEntry.snapshotDate} without a live Morningstar pull.`,
+      );
+    } catch (error) {
+      dashboardState = appendRetentionNote(
+        dashboardState,
+        error instanceof Error
+          ? `Retention save failed: ${error.message}`
+          : "Retention save failed.",
+      );
+    }
+  }
+
+  if (enrichment.audit.status !== "configured" && retainedSnapshot) {
+    return describeRetainedSnapshot(
+      retainedSnapshot.dashboardState,
+      retainedSnapshot.entry,
+      "Live Morningstar refresh was unavailable, so the dashboard is using the latest retained live snapshot.",
+    );
+  }
+
+  return dashboardState;
 }

@@ -95,17 +95,17 @@ export function DashboardWorkbench({
       const formData = new FormData();
       formData.set("file", file);
 
-      const response = await fetch("/api/dashboard-state", {
+      const uploadResponse = await fetch("/api/dashboard-state?reason=manual_upload", {
         method: "POST",
         body: formData,
       });
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!uploadResponse.ok) {
+        const payload = (await uploadResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error ?? "Unable to rebuild dashboard state.");
       }
 
-      const nextState = (await response.json()) as DashboardState;
+      const nextState = (await uploadResponse.json()) as DashboardState;
       setDashboardState(nextState);
       setSelectedHoldingId(undefined);
     } catch (caughtError) {
@@ -151,7 +151,7 @@ export function DashboardWorkbench({
       setTokenStatus("Token saved. Refreshing live data...");
       setTokenStatusTone("neutral");
 
-      const refreshResponse = await fetch("/api/dashboard-state", {
+      const refreshResponse = await fetch("/api/dashboard-state?reason=token_refresh", {
         method: "POST",
       });
 
@@ -256,7 +256,8 @@ export function DashboardWorkbench({
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-200">
                   Paste the daily token once here. The app will store it locally and use
-                  it for live Morningstar pulls until it expires.
+                  it for live Morningstar pulls until it expires. Each successful refresh is
+                  also archived locally with the PMHub workbook values for retention.
                 </p>
                 <div className="mt-3 grid gap-3">
                   <input

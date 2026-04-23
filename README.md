@@ -27,6 +27,8 @@ This repo is currently focused on getting the Opp Value data contract right befo
 - if you prefer to see the server window, double-click `Open Opp Value Dashboard.cmd`
 - the app opens at `http://127.0.0.1:3000`
 - paste the current Morningstar token into the token box in the app when the daily token changes
+- each token-driven live refresh now writes a dated local retention snapshot under `data/retention`
+- the app can reuse the latest retained live snapshot for the same PMHub workbook if Morningstar is temporarily unavailable
 
 ## Morningstar SDK Wiring
 - preferred integration path: Python `morningstar_data` SDK

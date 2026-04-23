@@ -28,6 +28,8 @@ async function loadDefaultPortfolioWorkbookBuffer() {
 
 export async function POST(request: Request) {
   try {
+    const url = new URL(request.url);
+    const snapshotReason = url.searchParams.get("reason") ?? "dashboard_refresh";
     const contentType = request.headers.get("content-type") ?? "";
     let uploadedFile: File | null = null;
 
@@ -53,7 +55,15 @@ export async function POST(request: Request) {
     }
 
     const workbook = parseWorkbookData(workbookInput.fileName, workbookInput.buffer);
-    const dashboardState = await buildDashboardState([workbook]);
+    const dashboardState = await buildDashboardState([workbook], {
+      retention: {
+        workbookBuffer: workbookInput.buffer,
+        allowRetentionFallback: true,
+        persistSnapshots:
+          snapshotReason === "manual_upload" || snapshotReason === "token_refresh",
+        snapshotReason,
+      },
+    });
 
     return NextResponse.json(dashboardState);
   } catch (error) {
