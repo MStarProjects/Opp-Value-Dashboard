@@ -1,4 +1,5 @@
 import type { SourceRole } from "@/lib/data-sources";
+import type { AlgoDashboardData } from "@/types/algo";
 import type { CanonicalHolding } from "@/types/holdings";
 import type {
   DistributionRow,
@@ -52,8 +53,11 @@ export interface EnrichmentAudit {
 
 export interface DashboardState {
   asOfLabel?: string;
+  morningstarAsOfLabel?: string;
   sources: SourceSnapshot[];
+  algo: AlgoDashboardData;
   holdings: CanonicalHolding[];
+  detailRows: CanonicalHolding[];
   summary: PortfolioSummaryMetrics;
   sectorExposure: ExposureRow[];
   countryExposure: ExposureRow[];

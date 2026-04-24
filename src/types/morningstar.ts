@@ -8,6 +8,13 @@ export interface MorningstarEnrichmentRecord {
     ticker?: string;
     securityName?: string;
   };
+  matchedBenchmark?: {
+    name?: string;
+    secId?: string;
+    isin?: string;
+    cusip?: string;
+    weight?: number;
+  };
   benchmarkWeight?: number;
   benchmarkMatchMethod?: string;
   usedBenchmarkFallbackMetrics?: boolean;
@@ -20,6 +27,12 @@ export interface MorningstarEnrichmentRecord {
   priceToBook?: number;
   sector?: string;
   country?: string;
+  apiReturn1M?: number;
+  apiReturnMtd?: number;
+  apiReturnYtd?: number;
+  apiReturn1Y?: number;
+  pfvOverrideSecId?: string;
+  forwardPEOverrideSecId?: string;
 }
 
 export interface MorningstarBenchmarkHoldingsSnapshot {

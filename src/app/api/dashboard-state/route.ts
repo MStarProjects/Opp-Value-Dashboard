@@ -1,30 +1,13 @@
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
-
 import { NextResponse } from "next/server";
 
 import { buildDashboardState } from "@/features/dashboard/buildDashboardState";
 import { parseWorkbookData } from "@/features/workbook/parseWorkbook";
-import { detectSourceRole } from "@/lib/data-sources";
-
-async function loadDefaultPortfolioWorkbookBuffer() {
-  const dataDir = path.join(process.cwd(), "data", "raw");
-  const fileNames = await readdir(dataDir);
-  const excelFiles = fileNames.filter((fileName) => /\.xlsx?$/i.test(fileName));
-  const portfolioFiles = excelFiles.filter(
-    (fileName) => detectSourceRole(fileName) === "pmhub_portfolio",
-  );
-  const workbookFile = portfolioFiles[0] ?? excelFiles[0];
-
-  if (!workbookFile) {
-    return undefined;
-  }
-
-  return {
-    fileName: workbookFile,
-    buffer: await readFile(path.join(dataDir, workbookFile)),
-  };
-}
+import { persistCurrentWorkbook } from "@/lib/current-workbook-store";
+import {
+  findWorkbookInputByRole,
+  loadActiveWorkbookInputs,
+  mergeUploadedWorkbookInput,
+} from "@/lib/source-workbook-loader";
 
 export async function POST(request: Request) {
   try {
@@ -39,31 +22,61 @@ export async function POST(request: Request) {
       uploadedFile = candidate instanceof File ? candidate : null;
     }
 
-    const workbookInput =
-      uploadedFile
-        ? {
-            fileName: uploadedFile.name,
-            buffer: new Uint8Array(await uploadedFile.arrayBuffer()),
-          }
-        : await loadDefaultPortfolioWorkbookBuffer();
+    const activeInputs = await loadActiveWorkbookInputs();
+    let nextInputs = activeInputs;
 
-    if (!workbookInput) {
+    if (uploadedFile) {
+      const uploadedBuffer = new Uint8Array(await uploadedFile.arrayBuffer());
+      const uploadedWorkbook = parseWorkbookData(uploadedFile.name, uploadedBuffer);
+
+      if (
+        uploadedWorkbook.sourceRole === "unknown" ||
+        uploadedWorkbook.sourceRole === "presentation_example"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "That workbook was not recognized as either the PMHub portfolio file or the Equity Algo file.",
+          },
+          { status: 400 },
+        );
+      }
+
+      await persistCurrentWorkbook({
+        role: uploadedWorkbook.sourceRole,
+        fileName: uploadedFile.name,
+        buffer: uploadedBuffer,
+      });
+
+      nextInputs = mergeUploadedWorkbookInput(activeInputs, {
+        fileName: uploadedFile.name,
+        buffer: uploadedBuffer,
+        workbook: uploadedWorkbook,
+        origin: "upload",
+      });
+    }
+
+    const pmhubInput = findWorkbookInputByRole(nextInputs, "pmhub_portfolio");
+
+    if (!pmhubInput) {
       return NextResponse.json(
         { error: "No PMHub workbook was available to build the dashboard." },
         { status: 400 },
       );
     }
 
-    const workbook = parseWorkbookData(workbookInput.fileName, workbookInput.buffer);
-    const dashboardState = await buildDashboardState([workbook], {
+    const dashboardState = await buildDashboardState(
+      nextInputs.map((input) => input.workbook),
+      {
       retention: {
-        workbookBuffer: workbookInput.buffer,
+          workbookBuffer: pmhubInput.buffer,
         allowRetentionFallback: true,
         persistSnapshots:
           snapshotReason === "manual_upload" || snapshotReason === "token_refresh",
         snapshotReason,
       },
-    });
+      },
+    );
 
     return NextResponse.json(dashboardState);
   } catch (error) {

@@ -1,46 +1,48 @@
 # Opp Value Dashboard
 
-This repo is currently focused on getting the Opp Value data contract right before any more dashboard work.
+This repo now contains the current working local dashboard for Global xUS Opportunistic Value.
 
-## Current Scope
-- One monthly PMHub holdings workbook is the only required manual input.
-- Morningstar internal API will provide benchmark holdings, benchmark weights, and fundamental enrichment.
-- Data audit comes before UI polish.
+## Current Inputs
+- Monthly PMHub workbook for owned holdings
+- Monthly `Equity Algo LR` workbook for country algo weights
+- Daily Morningstar token for live benchmark and enrichment pulls
 
-## Current Data Contract
-- workbook sheet: `Sheet A`
-- header row: `1`
-- data start row: `3`
-- row `2`: sleeve summary row, excluded from holdings parsing
-- official portfolio weight for v1: `Weight`
-- primary match key: `ISIN`
-- fallback match key: `Ticker`
-- benchmark investment id: `MGXTMENU`
-- Direct data set: `Global xUS Opp Value`
-
-## Docs
-- `docs/data-foundation-scope.md`
-- `docs/data-audit-checklist.md`
+## Primary Docs
+- [docs/current-dashboard-logic.md](C:/Users/schuri2/OneDrive%20-%20MORNINGSTAR%20INC/Documents/GitHub/Opp-Value-Dashboard/docs/current-dashboard-logic.md)
+- [docs/data-foundation-scope.md](C:/Users/schuri2/OneDrive%20-%20MORNINGSTAR%20INC/Documents/GitHub/Opp-Value-Dashboard/docs/data-foundation-scope.md)
+- [docs/data-audit-checklist.md](C:/Users/schuri2/OneDrive%20-%20MORNINGSTAR%20INC/Documents/GitHub/Opp-Value-Dashboard/docs/data-audit-checklist.md)
+- [docs/session-log-2026-04-24.md](C:/Users/schuri2/OneDrive%20-%20MORNINGSTAR%20INC/Documents/GitHub/Opp-Value-Dashboard/docs/session-log-2026-04-24.md)
 
 ## Opening The App
 - double-click `Open Opp Value Dashboard.vbs` to start the local server and open the dashboard in your browser
 - if you prefer to see the server window, double-click `Open Opp Value Dashboard.cmd`
 - the app opens at `http://127.0.0.1:3000`
-- paste the current Morningstar token into the token box in the app when the daily token changes
-- each token-driven live refresh now writes a dated local retention snapshot under `data/retention`
-- the app can reuse the latest retained live snapshot for the same PMHub workbook if Morningstar is temporarily unavailable
+
+## Current Working Logic
+- PMHub workbook:
+  - sheet `Sheet A`
+  - header row `1`
+  - holdings start row `3`
+- Algo workbook:
+  - sheet `International_Opp_Value`
+  - dates on row `1`
+  - only rows `2` through `30`
+  - latest month in column `B`
+  - values scaled from decimals into percentage weights
+- Morningstar:
+  - benchmark investment id `MGXTMENU`
+  - latest benchmark holdings date is pulled automatically
+  - portfolio matching uses `ISIN`, then `Ticker`
+
+## Retention
+- PMHub uploads are retained locally
+- Algo uploads are retained locally
+- token-driven Morningstar refreshes are retained locally
+- the app can reuse the latest retained compatible snapshot if Morningstar is temporarily unavailable
 
 ## Morningstar SDK Wiring
 - preferred integration path: Python `morningstar_data` SDK
 - benchmark investment id: `MGXTMENU`
-- saved Direct data set: `Global xUS Opp Value`
-- environment toggle: `MORNINGSTAR_ENABLE_SDK=true`
-- optional Python path override: `MORNINGSTAR_PYTHON_PATH`
 - preferred token env var: `MD_AUTH_TOKEN`
-- accepted alias for daily auth rotation: `MORNINGSTAR_API_TOKEN` (mapped into `MD_AUTH_TOKEN` by the Python bridge)
-
-## Current Engineering Direction
-1. Parse the PMHub workbook exactly.
-2. Build an explicit audit around identifier quality and enrichment coverage.
-3. Use the Python SDK bridge to fetch latest benchmark holdings and Direct data-set enrichment.
-4. Revisit the app experience only after the data layer is trustworthy.
+- accepted alias: `MORNINGSTAR_API_TOKEN`
+- optional Python path override: `MORNINGSTAR_PYTHON_PATH`

@@ -132,7 +132,13 @@ export function parseWorkbookData(
     data instanceof Uint8Array
       ? XLSX.read(data, { type: "buffer" })
       : XLSX.read(data, { type: "array" });
-  const sourceRole = detectSourceRole(fileName);
+  const inferredAlgoWorkbook = workbook.SheetNames.some(
+    (sheetName) => sheetName.toLowerCase() === "international_opp_value",
+  );
+  const sourceRole =
+    detectSourceRole(fileName) === "unknown" && inferredAlgoWorkbook
+      ? "algo_signal"
+      : detectSourceRole(fileName);
   const looksLikePmhubWorkbook =
     workbook.SheetNames.length === 1 &&
     workbook.SheetNames[0].toLowerCase() === pmhubWorkbookContract.sheetName.toLowerCase();

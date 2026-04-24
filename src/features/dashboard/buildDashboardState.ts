@@ -4,6 +4,7 @@ import {
   buildPfvDistribution,
   buildSectorExposure,
 } from "@/features/calculations/sectorAggregation";
+import { parseAlgoWorkbook } from "@/features/algo/parseAlgoWorkbook";
 import { summarizePortfolio } from "@/features/calculations/portfolioMetrics";
 import { enrichPortfolioHoldings } from "@/features/morningstar/enrichPortfolioHoldings";
 import { detectHoldingIssues } from "@/features/reconciliation/issueDetection";
@@ -49,6 +50,61 @@ function asNumber(value: string | number | null | undefined): number | undefined
 
 function normalizeIdentifier(value?: string): string | undefined {
   return value?.trim().toLowerCase();
+}
+
+function resolveCountryName(value?: string) {
+  const normalized = asString(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const explicitNames: Record<string, string> = {
+    GB: "United Kingdom",
+    UK: "United Kingdom",
+    US: "United States",
+    UAE: "United Arab Emirates",
+    AUS: "Australia",
+    BRA: "Brazil",
+    CAN: "Canada",
+    CHE: "Switzerland",
+    CHN: "China",
+    DEU: "Germany",
+    DNK: "Denmark",
+    ESP: "Spain",
+    FIN: "Finland",
+    FRA: "France",
+    GBR: "United Kingdom",
+    HKG: "Hong Kong",
+    IDN: "Indonesia",
+    IND: "India",
+    IRL: "Ireland",
+    ITA: "Italy",
+    JPN: "Japan",
+    KOR: "South Korea",
+    MEX: "Mexico",
+    NLD: "Netherlands",
+    SGP: "Singapore",
+    SWE: "Sweden",
+    TWN: "Taiwan",
+    USA: "United States",
+    "--": "Cash / Currency",
+  };
+
+  const upper = normalized.toUpperCase();
+  if (explicitNames[upper]) {
+    return explicitNames[upper];
+  }
+
+  if (/^[A-Z]{2}$/.test(upper)) {
+    try {
+      const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
+      return displayNames.of(upper) ?? normalized;
+    } catch {
+      return normalized;
+    }
+  }
+
+  return normalized;
 }
 
 function getFieldValue(row: ParsedSheetRow, key: PmhubFieldKey) {
@@ -109,12 +165,24 @@ function mapWorkbookRows(sheet: ParsedSheet): CanonicalHolding[] {
       isin: getFieldString(row, "isin"),
       cusip: getFieldString(row, "cusip"),
       sedol: getFieldString(row, "sedol"),
-      country: getFieldString(row, "country"),
+      country:
+        getFieldString(row, "businessCountry") ??
+        resolveCountryName(getFieldString(row, "country")),
+      currency: getFieldString(row, "currency"),
+      sector: getFieldString(row, "sector"),
       currencyContribution: getFieldNumber(row, "currencyContribution"),
       targetWeight: getWeight(row, sheet),
       price: getFieldNumber(row, "price"),
+      mtdReturn: getFieldNumber(row, "mtdReturn"),
       oneMonthReturn: getFieldNumber(row, "oneMonthReturn"),
       ytdReturn: getFieldNumber(row, "ytdReturn"),
+      oneYearReturn: getFieldNumber(row, "oneYearReturn"),
+      contributionToReturnMtd: getFieldNumber(row, "contributionToReturnMtd"),
+      contributionToReturnYtd: getFieldNumber(row, "contributionToReturnYtd"),
+      contributionToReturnOneMonth: getFieldNumber(
+        row,
+        "contributionToReturnOneMonth",
+      ),
       priceToFairValue: getFieldNumber(row, "priceToFairValue"),
       moat: getFieldString(row, "moat"),
       uncertainty: getFieldString(row, "uncertainty"),
@@ -149,6 +217,27 @@ function indexHoldings(holdings: CanonicalHolding[]) {
   return index;
 }
 
+function indexHoldingsForDetailRows(holdings: CanonicalHolding[]) {
+  const index = new Map<string, CanonicalHolding>();
+
+  for (const holding of holdings) {
+    const keys = [
+      normalizeIdentifier(holding.secid),
+      normalizeIdentifier(holding.isin),
+      normalizeIdentifier(holding.ticker),
+      normalizeIdentifier(holding.securityName),
+    ].filter(Boolean) as string[];
+
+    for (const key of keys) {
+      if (!index.has(key)) {
+        index.set(key, holding);
+      }
+    }
+  }
+
+  return index;
+}
+
 function findHolding(
   index: Map<string, CanonicalHolding>,
   record: MorningstarEnrichmentRecord,
@@ -161,6 +250,110 @@ function findHolding(
   ].filter(Boolean) as string[];
 
   return keys.map((key) => index.get(key)).find(Boolean);
+}
+
+function mapBenchmarkRecordToHolding(
+  record: Record<string, string | number | boolean | null>,
+): CanonicalHolding | undefined {
+  const securityName = asString(
+    (record.name as string | number | null | undefined) ??
+      (record.Name as string | number | null | undefined),
+  );
+  const benchmarkWeight = asNumber(
+    (record.weight as string | number | null | undefined) ??
+      (record.Weight as string | number | null | undefined),
+  );
+
+  if (!securityName || benchmarkWeight == null) {
+    return undefined;
+  }
+
+  const secid = asString(
+    (record.secId as string | number | null | undefined) ??
+      (record.SecId as string | number | null | undefined),
+  );
+  const isin = asString(
+    (record.isin as string | number | null | undefined) ??
+      (record.ISIN as string | number | null | undefined),
+  );
+  const ticker = asString(
+    (record.ticker as string | number | null | undefined) ??
+      (record.Ticker as string | number | null | undefined),
+  );
+  const country = resolveCountryName(
+    asString(
+      (record.country as string | number | null | undefined) ??
+        (record.Country as string | number | null | undefined) ??
+        (record.businessCountry as string | number | null | undefined) ??
+        (record["Business Country"] as string | number | null | undefined),
+    ),
+  );
+  const sector = asString(
+    (record.sector as string | number | null | undefined) ??
+      (record.Sector as string | number | null | undefined) ??
+      (record.gicsSector as string | number | null | undefined) ??
+      (record["GICS Sector"] as string | number | null | undefined),
+  );
+
+  return {
+    canonicalId: `benchmark::${normalizeIdentifier(secid) ?? normalizeIdentifier(isin) ?? normalizeIdentifier(ticker) ?? normalizeIdentifier(securityName) ?? securityName}`,
+    securityName,
+    isin,
+    ticker,
+    secid,
+    cusip: asString(
+      (record.cusip as string | number | null | undefined) ??
+        (record.CUSIP as string | number | null | undefined),
+    ),
+    country,
+    sector,
+    targetWeight: 0,
+    benchmarkWeight,
+    priceToFairValue: asNumber(
+      (record.priceToFairValue as string | number | null | undefined) ??
+        (record["Price To Fair Value"] as string | number | null | undefined),
+    ),
+    upsideToFairValue: undefined,
+    forwardPE: asNumber(
+      (record.forwardPE as string | number | null | undefined) ??
+        (record["Forward P/E"] as string | number | null | undefined) ??
+        (record["Forward PE"] as string | number | null | undefined),
+    ),
+    priceToBook: asNumber(
+      (record.priceToBook as string | number | null | undefined) ??
+        (record["Price To Book"] as string | number | null | undefined) ??
+        (record["P/B"] as string | number | null | undefined),
+    ),
+    roe: asNumber(
+      (record.roe as string | number | null | undefined) ??
+        (record.ROE as string | number | null | undefined),
+    ),
+    moat: asString(
+      (record.moat as string | number | null | undefined) ??
+        (record.Moat as string | number | null | undefined),
+    ),
+    uncertainty: asString(
+      (record.uncertainty as string | number | null | undefined) ??
+        (record["Fair Value Uncertainty"] as string | number | null | undefined),
+    ),
+    apiReturn1M: asNumber(
+      record.apiReturn1M as string | number | null | undefined,
+    ),
+    apiReturnMtd: asNumber(
+      record.apiReturnMtd as string | number | null | undefined,
+    ),
+    apiReturnYtd: asNumber(
+      record.apiReturnYtd as string | number | null | undefined,
+    ),
+    apiReturn1Y: asNumber(
+      record.apiReturn1Y as string | number | null | undefined,
+    ),
+    sourceSheets: ["Benchmark"],
+    matchMethod: "benchmark_only",
+    matchConfidence: 1,
+    reconciliationStatus: "matched",
+    dataQualityFlags: [],
+  };
 }
 
 function applyMorningstarEnrichment(
@@ -183,7 +376,16 @@ function applyMorningstarEnrichment(
     holding.roe = record.roe ?? holding.roe;
     holding.priceToBook = record.priceToBook ?? holding.priceToBook;
     holding.sector = record.sector ?? holding.sector;
-    holding.country = record.country ?? holding.country;
+    holding.country = resolveCountryName(record.country) ?? holding.country;
+    holding.secid =
+      record.identifier.secid ?? record.matchedBenchmark?.secId ?? holding.secid;
+    holding.apiReturn1M = record.apiReturn1M ?? holding.apiReturn1M;
+    holding.apiReturnMtd = record.apiReturnMtd ?? holding.apiReturnMtd;
+    holding.apiReturnYtd = record.apiReturnYtd ?? holding.apiReturnYtd;
+    holding.apiReturn1Y = record.apiReturn1Y ?? holding.apiReturn1Y;
+    holding.hasApiPriceToFairValue =
+      record.priceToFairValue != null ? true : holding.hasApiPriceToFairValue;
+    holding.hasApiMoat = record.moat != null ? true : holding.hasApiMoat;
     if (record.benchmarkMatchMethod) {
       holding.matchMethod = record.benchmarkMatchMethod;
     }
@@ -196,6 +398,10 @@ function finalizeHoldings(holdings: CanonicalHolding[]): CanonicalHolding[] {
       ...holding,
       activeWeightVsBenchmark:
         (holding.targetWeight ?? holding.driftedWeight ?? 0) - (holding.benchmarkWeight ?? 0),
+      upsideToFairValue:
+        holding.priceToFairValue != null && holding.priceToFairValue !== 0
+          ? 1 / holding.priceToFairValue - 1
+          : undefined,
       dataQualityFlags: [
         ...(holding.isin == null ? ["Missing ISIN"] : []),
         ...(holding.ticker == null ? ["Missing ticker"] : []),
@@ -204,6 +410,72 @@ function finalizeHoldings(holdings: CanonicalHolding[]): CanonicalHolding[] {
       ],
     }))
     .sort((left, right) => (right.targetWeight ?? 0) - (left.targetWeight ?? 0));
+}
+
+function buildDetailRows(
+  portfolioHoldings: CanonicalHolding[],
+  benchmarkRecords?: Array<Record<string, string | number | boolean | null>>,
+) {
+  const detailRows = portfolioHoldings.map((holding) => ({ ...holding }));
+  const detailIndex = indexHoldingsForDetailRows(detailRows);
+
+  for (const record of benchmarkRecords ?? []) {
+    const benchmarkHolding = mapBenchmarkRecordToHolding(record);
+    if (!benchmarkHolding) {
+      continue;
+    }
+
+    const keys = [
+      normalizeIdentifier(benchmarkHolding.secid),
+      normalizeIdentifier(benchmarkHolding.isin),
+      normalizeIdentifier(benchmarkHolding.ticker),
+      normalizeIdentifier(benchmarkHolding.securityName),
+    ].filter(Boolean) as string[];
+
+    const existing = keys.map((key) => detailIndex.get(key)).find(Boolean);
+    if (existing) {
+      existing.benchmarkWeight = benchmarkHolding.benchmarkWeight ?? existing.benchmarkWeight;
+      existing.secid = existing.secid ?? benchmarkHolding.secid;
+      existing.country = existing.country ?? benchmarkHolding.country;
+      existing.sector = existing.sector ?? benchmarkHolding.sector;
+      existing.priceToFairValue =
+        existing.priceToFairValue ?? benchmarkHolding.priceToFairValue;
+      existing.forwardPE = existing.forwardPE ?? benchmarkHolding.forwardPE;
+      existing.priceToBook = existing.priceToBook ?? benchmarkHolding.priceToBook;
+      existing.roe = existing.roe ?? benchmarkHolding.roe;
+      existing.moat = existing.moat ?? benchmarkHolding.moat;
+      existing.uncertainty = existing.uncertainty ?? benchmarkHolding.uncertainty;
+      existing.apiReturn1M = existing.apiReturn1M ?? benchmarkHolding.apiReturn1M;
+      existing.apiReturnMtd = existing.apiReturnMtd ?? benchmarkHolding.apiReturnMtd;
+      existing.apiReturnYtd = existing.apiReturnYtd ?? benchmarkHolding.apiReturnYtd;
+      existing.apiReturn1Y = existing.apiReturn1Y ?? benchmarkHolding.apiReturn1Y;
+      continue;
+    }
+
+    const finalizedBenchmarkHolding = finalizeHoldings([benchmarkHolding])[0];
+    detailRows.push(finalizedBenchmarkHolding);
+
+    for (const key of keys) {
+      if (!detailIndex.has(key)) {
+        detailIndex.set(key, finalizedBenchmarkHolding);
+      }
+    }
+  }
+
+  return detailRows.sort((left, right) => {
+    const leftOwned = (left.targetWeight ?? 0) > 0 ? 1 : 0;
+    const rightOwned = (right.targetWeight ?? 0) > 0 ? 1 : 0;
+
+    if (leftOwned !== rightOwned) {
+      return rightOwned - leftOwned;
+    }
+
+    if ((right.targetWeight ?? 0) !== (left.targetWeight ?? 0)) {
+      return (right.targetWeight ?? 0) - (left.targetWeight ?? 0);
+    }
+
+    return (right.benchmarkWeight ?? 0) - (left.benchmarkWeight ?? 0);
+  });
 }
 
 function countDuplicates(values: Array<string | undefined>) {
@@ -250,6 +522,44 @@ function selectPortfolioSheet(workbook?: ParsedWorkbook) {
   );
 }
 
+function selectAlgoWorkbook(workbooks: ParsedWorkbook[]) {
+  return (
+    workbooks.find((workbook) => workbook.sourceRole === "algo_signal") ??
+    workbooks.find((workbook) =>
+      workbook.sheets.some((sheet) => sheet.name.toLowerCase() === "international_opp_value"),
+    )
+  );
+}
+
+function formatMorningstarAsOfLabel(dateValue?: string) {
+  if (!dateValue) {
+    return undefined;
+  }
+
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return dateValue;
+  }
+
+  return parsed.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function withAlgoDashboardState(
+  dashboardState: DashboardState,
+  fallbackAlgo: DashboardState["algo"],
+): DashboardState {
+  return {
+    ...dashboardState,
+    algo: fallbackAlgo.available ? fallbackAlgo : dashboardState.algo,
+  };
+}
+
 interface DashboardRetentionOptions {
   workbookBuffer?: Uint8Array;
   allowRetentionFallback?: boolean;
@@ -267,6 +577,8 @@ export async function buildDashboardState(
   const workbooks = pickLatestWorkbooksByRole(rawWorkbooks);
   const portfolioWorkbook = selectPortfolioWorkbook(workbooks);
   const portfolioSheet = selectPortfolioSheet(portfolioWorkbook);
+  const algoWorkbook = selectAlgoWorkbook(workbooks);
+  const algo = parseAlgoWorkbook(workbooks);
   const retentionOptions = options?.retention;
   const workbookHash = retentionOptions?.workbookBuffer
     ? computeWorkbookHash(retentionOptions.workbookBuffer)
@@ -275,12 +587,18 @@ export async function buildDashboardState(
     retentionOptions?.allowRetentionFallback && workbookHash
       ? await loadLatestConfiguredSnapshot(workbookHash)
       : undefined;
+  const normalizedRetainedDashboardState = retainedSnapshot
+    ? withAlgoDashboardState(retainedSnapshot.dashboardState, algo)
+    : undefined;
 
   if (!portfolioSheet || !portfolioWorkbook) {
     return {
       asOfLabel: undefined,
+      morningstarAsOfLabel: undefined,
       sources: [],
+      algo,
       holdings: [],
+      detailRows: [],
       summary: summarizePortfolio([]),
       sectorExposure: [],
       countryExposure: [],
@@ -324,8 +642,14 @@ export async function buildDashboardState(
   }
 
   if (options?.preferStubEnrichment && retainedSnapshot) {
+    const retainedDashboardState = normalizedRetainedDashboardState!;
     return describeRetainedSnapshot(
-      retainedSnapshot.dashboardState,
+      {
+        ...retainedDashboardState,
+        morningstarAsOfLabel:
+          retainedDashboardState.morningstarAsOfLabel ??
+          formatMorningstarAsOfLabel(retainedSnapshot.entry.createdAt),
+      },
       retainedSnapshot.entry,
       "Loaded the latest retained live snapshot instead of a fresh Morningstar pull.",
     );
@@ -348,12 +672,29 @@ export async function buildDashboardState(
       dateLabel: formatDateToken(portfolioWorkbook.dateToken),
       sheetCount: portfolioWorkbook.sheets.length,
     },
+    ...(algoWorkbook && algoWorkbook.fileName !== portfolioWorkbook.fileName
+      ? [
+          {
+            fileName: algoWorkbook.fileName,
+            role: algoWorkbook.sourceRole,
+            dateToken: algoWorkbook.dateToken,
+            dateLabel: formatDateToken(algoWorkbook.dateToken),
+            sheetCount: algoWorkbook.sheets.length,
+          } satisfies SourceSnapshot,
+        ]
+      : []),
   ];
 
   let dashboardState: DashboardState = {
     asOfLabel: sources[0]?.dateLabel,
+    morningstarAsOfLabel:
+      enrichment.audit.status === "configured"
+        ? formatMorningstarAsOfLabel(new Date().toISOString())
+        : undefined,
     sources,
+    algo,
     holdings: finalizedHoldings,
+    detailRows: buildDetailRows(finalizedHoldings, enrichment.benchmarkHoldings?.records),
     summary: summarizePortfolio(finalizedHoldings),
     sectorExposure: buildSectorExposure(finalizedHoldings),
     countryExposure: buildCountryExposure(finalizedHoldings),
@@ -433,8 +774,14 @@ export async function buildDashboardState(
   }
 
   if (enrichment.audit.status !== "configured" && retainedSnapshot) {
+    const retainedDashboardState = normalizedRetainedDashboardState!;
     return describeRetainedSnapshot(
-      retainedSnapshot.dashboardState,
+      {
+        ...retainedDashboardState,
+        morningstarAsOfLabel:
+          retainedDashboardState.morningstarAsOfLabel ??
+          formatMorningstarAsOfLabel(retainedSnapshot.entry.createdAt),
+      },
       retainedSnapshot.entry,
       "Live Morningstar refresh was unavailable, so the dashboard is using the latest retained live snapshot.",
     );

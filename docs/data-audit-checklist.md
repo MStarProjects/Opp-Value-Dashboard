@@ -1,52 +1,41 @@
-# Opp Value Data Audit Checklist
+# Opp Value Current Audit Checklist
 
-Date: 2026-04-22
+Date: 2026-04-24
 
-## Goal
-A batch is ready only when the monthly PMHub workbook is parsed cleanly and every expected security has been evaluated against Morningstar enrichment rules.
+## PMHub Workbook Checks
+- Workbook contains `Sheet A`
+- Header row is `1`
+- Holdings parsing starts on row `3`
+- Row `2` is ignored
+- `Weight` is captured as the official portfolio weight
+- All workbook columns are preserved
 
-## Workbook Structure Checks
-- workbook contains `Sheet A`
-- header row is row `1`
-- data parsing begins on row `3`
-- row `2` is excluded from holdings parsing
-- `Weight` is successfully captured as the portfolio weight field
-- all workbook columns are preserved in the parsed row model
+## Equity Algo Workbook Checks
+- Workbook contains `International_Opp_Value`
+- Date row is `1`
+- Latest value comes from column `B`
+- Only rows `2` through `30` are parsed
+- The `Mom` section is ignored
+- Algo identifiers map cleanly to countries
+- Algo values are multiplied by `100` into percentage weights
+- Each country appears only once after parsing
 
-## Portfolio Row Checks
-- row has a recognizable security name or identifier
-- portfolio weight is present when expected
-- duplicate rows are surfaced, not silently merged
+## Portfolio Identifier Checks
+- Attempt `ISIN` first
+- Use `Ticker` only when `ISIN` is missing
+- Rows missing both `ISIN` and `Ticker` are flagged
 
-## Identifier Checks
-- `ISIN` present
-- if `ISIN` missing, `Ticker` present
-- rows missing both `ISIN` and `Ticker` are flagged
-
-## Duplicate Checks
-- duplicate `ISIN`
-- duplicate `Ticker`
-- duplicate identifier collisions across different security names
-
-## Morningstar Matching Checks
-- every row with `ISIN` is attempted against Morningstar using `ISIN`
-- rows without `ISIN` attempt `Ticker`
-- rows matched by ticker are flagged as fallback matches
-- unmatched rows remain unmatched and visible in audit output
-
-## Benchmark Checks
-- benchmark constituents are received from Morningstar for `MGXTMENU`
-- latest available benchmark holding date is identified correctly
-- benchmark weights are attached to matched securities when applicable
-- securities not in the benchmark are not treated as match failures if Morningstar security enrichment still succeeds
-- missing benchmark weight is informational for off-benchmark holdings
-- cash and currency rows are allowed to carry `0` benchmark weight without being treated as match failures
-- ADR/local-share pairs are matched onto the same portfolio row when a reliable issuer-equivalent benchmark constituent exists
-- benchmark-local fallback metrics are only used when the portfolio-held security is missing the Direct field
-- Securities whose `Business Country` is Brazil or Mexico are allowed to use ADR overrides for `PFV`, `Moat`, and `Forward P/E` when those fields are missing on the local line
+## Benchmark Join Checks
+- Latest benchmark holdings date is resolved from Morningstar
+- Full benchmark holdings are received for `MGXTMENU`
+- Exact benchmark matches are counted
+- ADR/local-share equivalent matches are counted
+- Portfolio-only off-benchmark rows remain visible
+- Cash/currency rows are counted separately and not treated as benchmark failures
 
 ## Fundamental Field Checks
-- `PFV`
+- `Benchmark Weight`
+- `Price To Fair Value`
 - `Economic Moat`
 - `Fair Value Uncertainty`
 - `Sector`
@@ -55,35 +44,43 @@ A batch is ready only when the monthly PMHub workbook is parsed cleanly and ever
 - `Forward P/E`
 - `Price/Book`
 
-## Workbook Fallback Checks
-- if the API does not return a fundamental field, workbook fallback is attempted where available
-- workbook fallback usage is counted and visible
-- `Currency Contrib` remains workbook-owned
+## Override Checks
+- Portfolio-held security metrics win first
+- Benchmark-local fallback metrics only fill gaps
+- Brazil/Mexico ADR override logic applies only to:
+  - `P/FV`
+  - `Moat`
+  - `Forward P/E`
+- Explicit pinned override `SecId`s override generic ADR search where configured
 
-## Allowed Missingness
-- `PFV` may be missing
+## Summary Checks
+- Portfolio weighted metrics use portfolio weights only
+- Benchmark weighted metrics use the full benchmark universe
+- Benchmark total weight is based on the full benchmark pull, not overlap rows
 
-## Audit Failures
-- workbook row with `ISIN` does not match to Morningstar
-- row missing both `ISIN` and `Ticker`
-- duplicate identifier collision unresolved
-- parse contract for `Sheet A` is broken
+## Country Position Checks
+- `Algo Weight` is shown as a percentage weight
+- `Active Weight vs Algo` is compared against the scaled algo weight
+- Algo slider/filter uses the scaled algo weight
 
-## Audit Output We Want In Code
-- parsed workbook rows
-- holdings rows with portfolio weight
-- rows missing `ISIN`
-- rows missing `Ticker`
-- duplicate `ISIN` count
-- duplicate `Ticker` count
-- rows ready for API matching by `ISIN`
-- rows requiring `Ticker` fallback
-- rows enriched from API
-- rows using workbook fallback fields
-- unmatched rows
-- exact benchmark matches
-- ADR/local-share benchmark equivalent matches
-- cash/currency rows ignored for benchmark matching
-- off-benchmark rows with explicit `0` benchmark weight
-- rows that used benchmark-local fallback metrics
-- rows that used Brazil/Mexico ADR overrides
+## Detail / Lookthrough Checks
+- Full join includes:
+  - portfolio rows
+  - connected benchmark rows
+  - benchmark-only rows
+- User can sort visible columns
+- User can filter visible columns
+- User can hide columns
+- User can zoom the table
+- User can export the current view to Excel
+
+## Algo Tab Checks
+- Chart shows only the parsed absolute-value country rows
+- Hover shows country, month, and value
+- Chart and controls fit a normal laptop screen without requiring oversized desktop width
+- Raw data table shows the latest 12 months
+
+## Retention Checks
+- PMHub uploads are retained by date
+- Token refresh pulls are retained by date
+- Retained snapshots can be reused if live Morningstar refresh is unavailable

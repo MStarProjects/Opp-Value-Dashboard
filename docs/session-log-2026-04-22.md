@@ -141,3 +141,31 @@ Move the project from loose prototype mode into a usable local dashboard built a
 
 ## Next Likely Step
 - Replace the saved dataset dependency with explicit Direct datapoint requests so PFV / moat / uncertainty / ROE / forward P/E / price-to-book can load live without depending on `Global xUS Opp Value`
+
+## Algo Workbook Rules
+- Monthly algo source file:
+  - `Equity Algo LR`
+- Sheet:
+  - `International_Opp_Value`
+- Date headers:
+  - row `1`
+  - latest date is column `B`
+- Allowed rows:
+  - use only the absolute-value country block in sheet rows `2` through `30`
+  - do not read the `Mom` block
+- Country matching:
+  - column `A` identifier maps to country using the two-letter country code prefix such as `JP EQ -> Japan`
+  - dedupe by country code so each country appears only once
+- Value scaling:
+  - algo values are stored as decimals in Excel
+  - multiply by `100` so the app treats them as percentage weights
+- Country Position logic:
+  - `Portfolio Weight`
+  - `Benchmark Weight`
+  - `Active Weight vs Benchmark`
+  - `Algo Weight`
+  - `Active Weight vs Algo`
+- Algo tab:
+  - interactive time-series chart with hover tooltip
+  - latest `12` months of history
+  - raw data table

@@ -9,6 +9,7 @@ export interface CanonicalHolding {
   cusip?: string;
   sedol?: string;
   country?: string;
+  currency?: string;
   sector?: string;
   industry?: string;
   moat?: string;
@@ -20,8 +21,19 @@ export interface CanonicalHolding {
   activeWeightVsBenchmark?: number;
   activeWeightVsModel?: number;
   price?: number;
+  mtdReturn?: number;
   oneMonthReturn?: number;
   ytdReturn?: number;
+  oneYearReturn?: number;
+  apiReturn1M?: number;
+  apiReturnMtd?: number;
+  apiReturnYtd?: number;
+  apiReturn1Y?: number;
+  hasApiPriceToFairValue?: boolean;
+  hasApiMoat?: boolean;
+  contributionToReturnMtd?: number;
+  contributionToReturnYtd?: number;
+  contributionToReturnOneMonth?: number;
   priceToFairValue?: number;
   upsideToFairValue?: number;
   uncertainty?: string;

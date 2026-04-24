@@ -5,6 +5,8 @@ import re
 import sys
 from typing import Any
 
+import pandas as pd
+
 from join_override_rules import (
     PFV_PE_OVERRIDE_RULES,
     find_pfv_pe_override,
@@ -52,6 +54,30 @@ def _json_default(value: Any) -> Any:
             pass
 
     return str(value)
+
+
+def _json_safe(value: Any) -> Any:
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+
+    return value
 
 
 def _has_value(value: Any) -> bool:
@@ -138,6 +164,7 @@ _KNOWN_DATA_SET_IDS = {
 }
 
 _INVESTMENT_BATCH_SIZE = 500
+_RETURN_BATCH_SIZE = 500
 
 
 def _resolve_data_set_details(md: Any, data_set_name: str, notes: list[str]) -> tuple[Any, str]:
@@ -234,6 +261,171 @@ def _build_override_data_points(as_of_date: str) -> list[dict[str, Any]]:
         {"datapointId": "OS603"},
         {"datapointId": "ST198"},
     ]
+
+
+def _build_return_period_window(end_date: str) -> dict[str, pd.Timestamp]:
+    end_timestamp = pd.Timestamp(end_date).normalize()
+    one_month_start = (end_timestamp - pd.DateOffset(months=1)).normalize()
+    month_to_date_start = end_timestamp.replace(day=1)
+    year_to_date_start = end_timestamp.replace(month=1, day=1)
+    one_year_start = (end_timestamp - pd.DateOffset(years=1)).normalize()
+
+    earliest_start = min(one_month_start, month_to_date_start, year_to_date_start, one_year_start)
+
+    return {
+        "end": end_timestamp,
+        "fetchStart": (earliest_start - pd.DateOffset(days=7)).normalize(),
+        "1M": one_month_start,
+        "MTD": month_to_date_start,
+        "YTD": year_to_date_start,
+        "1Y": one_year_start,
+    }
+
+
+def _find_return_value_column(columns: list[str]) -> str | None:
+    explicit = _find_column(columns, ["Daily Return", "Return"])
+    if explicit:
+        return explicit
+
+    for column in columns:
+        if _normalize(column) not in {"id", "date", "name"}:
+            return column
+
+    return None
+
+
+def _compute_period_return_from_index(
+    values: list[tuple[pd.Timestamp, float]],
+    start_timestamp: pd.Timestamp,
+    end_timestamp: pd.Timestamp,
+) -> float | None:
+    if not values:
+        return None
+
+    start_candidates = [value for timestamp, value in values if timestamp <= start_timestamp]
+    end_candidates = [value for timestamp, value in values if timestamp <= end_timestamp]
+    if not start_candidates or not end_candidates:
+        return None
+
+    start_value = float(start_candidates[-1])
+    end_value = float(end_candidates[-1])
+    if start_value == 0:
+        return None
+
+    return ((end_value / start_value) - 1) * 100
+
+
+def _summarize_return_rows(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    return_window: dict[str, pd.Timestamp],
+) -> dict[str, dict[str, float | None]]:
+    id_column = _find_column(columns, ["ID", "Id"])
+    date_column = _find_column(columns, ["Date"])
+    value_column = _find_return_value_column(columns)
+
+    if not id_column or not date_column or not value_column:
+        return {}
+
+    grouped_rows: dict[str, list[tuple[pd.Timestamp, float]]] = {}
+    for row in rows:
+        security_id = row.get(id_column)
+        date_value = row.get(date_column)
+        return_value = row.get(value_column)
+
+        if not security_id or not _has_value(date_value) or not _has_value(return_value):
+            continue
+
+        try:
+            timestamp = pd.Timestamp(date_value).normalize()
+            numeric_return = float(return_value)
+        except Exception:
+            continue
+
+        normalized_security_id = str(security_id).strip()
+        if not normalized_security_id:
+            continue
+
+        grouped_rows.setdefault(normalized_security_id, []).append((timestamp, numeric_return))
+
+    period_field_map = {
+        "1M": "apiReturn1M",
+        "MTD": "apiReturnMtd",
+        "YTD": "apiReturnYtd",
+        "1Y": "apiReturn1Y",
+    }
+
+    results: dict[str, dict[str, float | None]] = {}
+    end_timestamp = return_window["end"]
+    for security_id, values in grouped_rows.items():
+        ordered_values = sorted(values, key=lambda item: item[0])
+        metrics: dict[str, float | None] = {}
+
+        for period_key, field_name in period_field_map.items():
+            metrics[field_name] = _compute_period_return_from_index(
+                ordered_values,
+                return_window[period_key],
+                end_timestamp,
+            )
+
+        results[security_id] = metrics
+
+    return results
+
+
+def _fetch_return_metrics_by_security(
+    md: Any,
+    security_ids: list[str],
+    end_date: str,
+    notes: list[str],
+) -> dict[str, dict[str, float | None]]:
+    unique_security_ids = [security_id for security_id in dict.fromkeys(security_ids) if security_id]
+    if not unique_security_ids:
+        return {}
+
+    return_window = _build_return_period_window(end_date)
+    rows: list[dict[str, Any]] = []
+    columns: list[str] = []
+
+    for index in range(0, len(unique_security_ids), _RETURN_BATCH_SIZE):
+        batch = unique_security_ids[index : index + _RETURN_BATCH_SIZE]
+        try:
+            frame = md.direct.get_returns(
+                investments=batch,
+                start_date=return_window["fetchStart"].strftime("%Y-%m-%d"),
+                end_date=end_date,
+                freq=md.direct.data_type.Frequency.daily,
+            )
+            if not columns:
+                columns = list(frame.columns)
+            rows.extend(frame.to_dict(orient="records"))
+        except Exception as exc:
+            notes.append(
+                f"Daily return batch failed for {len(batch)} securities; retrying individually. "
+                f"Reason: {type(exc).__name__}: {exc}"
+            )
+            for security_id in batch:
+                try:
+                    frame = md.direct.get_returns(
+                        investments=[security_id],
+                        start_date=return_window["fetchStart"].strftime("%Y-%m-%d"),
+                        end_date=end_date,
+                        freq=md.direct.data_type.Frequency.daily,
+                    )
+                    if not columns:
+                        columns = list(frame.columns)
+                    rows.extend(frame.to_dict(orient="records"))
+                except Exception as single_exc:
+                    notes.append(
+                        f"Daily return lookup failed for {security_id}: "
+                        f"{type(single_exc).__name__}: {single_exc}"
+                    )
+
+    metrics_by_security = _summarize_return_rows(rows, columns, return_window)
+    notes.append(
+        f"Loaded API return series for {len(metrics_by_security)} securities using daily Morningstar returns."
+    )
+    return metrics_by_security
 
 
 def _normalize_company_name(value: str | None) -> str:
@@ -451,6 +643,7 @@ def _build_stub_response(payload: dict[str, Any], notes: list[str]) -> dict[str,
                 "forward PE",
                 "ROE",
                 "price/book",
+                "1M/MTD/YTD/1Y returns",
             ],
             "matchedByIsin": 0,
             "matchedByTicker": 0,
@@ -493,7 +686,7 @@ def main() -> int:
                 f"Import error: {type(exc).__name__}: {exc}",
             ],
         )
-        print(json.dumps(response, default=_json_default))
+        print(json.dumps(_json_safe(response), default=_json_default, allow_nan=False))
         return 0
 
     notes: list[str] = []
@@ -555,7 +748,7 @@ def main() -> int:
                 payload,
                 notes + [f"No benchmark holding dates were returned for {resolved_benchmark_id}."],
             )
-            print(json.dumps(response, default=_json_default))
+            print(json.dumps(_json_safe(response), default=_json_default, allow_nan=False))
             return 0
 
         latest_benchmark_date = max(str(record.get("date")) for record in benchmark_date_records)
@@ -613,6 +806,144 @@ def main() -> int:
         requested_holdings = []
         benchmark_records = benchmark_holdings.to_dict(orient="records")
         benchmark_columns = list(benchmark_holdings.columns)
+
+        benchmark_metric_rows: list[dict[str, Any]] = []
+        benchmark_metric_columns: list[str] = []
+        benchmark_metric_record_indices: list[int] = []
+        if benchmark_records and data_points is not None:
+            benchmark_metric_identifiers = []
+            for index, benchmark_record in enumerate(benchmark_records):
+                identifier = _build_lookup_identifier(InvestmentIdentifier, benchmark_record)
+                if identifier is None:
+                    continue
+                benchmark_metric_identifiers.append(identifier)
+                benchmark_metric_record_indices.append(index)
+
+            if benchmark_metric_identifiers:
+                try:
+                    benchmark_metric_rows, benchmark_metric_columns = _fetch_investment_rows_batched(
+                        md,
+                        data_points,
+                        benchmark_metric_identifiers,
+                    )
+                except Exception as exc:
+                    notes.append(
+                        "Benchmark constituent metric enrichment partially failed; continuing with raw benchmark weights. "
+                        f"Reason: {type(exc).__name__}: {exc}"
+                    )
+
+            for metric_row_index, benchmark_record_index in enumerate(benchmark_metric_record_indices):
+                metric_row = (
+                    benchmark_metric_rows[metric_row_index]
+                    if metric_row_index < len(benchmark_metric_rows)
+                    else {}
+                )
+                benchmark_record = benchmark_records[benchmark_record_index]
+
+                metric_country = _pick_value(
+                    _safe_value(metric_row, benchmark_metric_columns, ["Business Country", "Country"]),
+                    benchmark_record.get("country"),
+                    benchmark_record.get("Country"),
+                )
+                metric_ticker = _pick_value(
+                    _safe_value(metric_row, benchmark_metric_columns, ["Ticker"]),
+                    benchmark_record.get("ticker"),
+                    benchmark_record.get("Ticker"),
+                )
+                explicit_override_rule = find_pfv_pe_override(
+                    security_name=_pick_value(
+                        benchmark_record.get("name"),
+                        benchmark_record.get("Name"),
+                    ),
+                    ticker=metric_ticker,
+                    country=metric_country,
+                )
+                explicit_override_result = None
+                if explicit_override_rule is not None:
+                    explicit_override_result = {
+                        "label": explicit_override_rule.get("label"),
+                        "secIds": [str(secid) for secid in explicit_override_rule.get("secIds", [])],
+                        "priceToFairValue": explicit_override_rule.get("priceToFairValue"),
+                        "forwardPE": explicit_override_rule.get("forwardPE"),
+                        "metricsBySecId": override_metrics_by_secid,
+                    }
+                benchmark_pfv_override, _ = _resolve_override_metric(
+                    explicit_override_result,
+                    "priceToFairValue",
+                )
+                benchmark_forward_pe_override, _ = _resolve_override_metric(
+                    explicit_override_result,
+                    "forwardPE",
+                )
+
+                benchmark_record["secId"] = _pick_value(
+                    benchmark_record.get("secId"),
+                    metric_row.get("Id"),
+                    metric_row.get("SecId"),
+                )
+                benchmark_record["ticker"] = metric_ticker
+                benchmark_record["country"] = metric_country
+                benchmark_record["sector"] = _pick_value(
+                    _safe_value(
+                        metric_row,
+                        benchmark_metric_columns,
+                        [
+                            "Morningstar Sector - display text",
+                            "Morningstar Sector",
+                            "Sector",
+                        ],
+                    ),
+                    benchmark_record.get("gicsSector"),
+                    benchmark_record.get("GICS Sector"),
+                    benchmark_record.get("sector"),
+                    benchmark_record.get("Sector"),
+                )
+                benchmark_record["priceToFairValue"] = _pick_value(
+                    benchmark_pfv_override,
+                    _safe_value(
+                        metric_row,
+                        benchmark_metric_columns,
+                        [
+                            "Price To Fair Value",
+                            "Price to Fair Value",
+                            "P/FV",
+                            "Price/Fair Value",
+                        ],
+                    ),
+                )
+                benchmark_record["forwardPE"] = _pick_value(
+                    benchmark_forward_pe_override,
+                    _safe_value(
+                        metric_row,
+                        benchmark_metric_columns,
+                        [
+                            "Forward Price To Earnings Ratio",
+                            "Forward Price/Earnings Ratio",
+                            "Forward P/E",
+                            "Forward PE",
+                        ],
+                    ),
+                )
+                benchmark_record["priceToBook"] = _safe_value(
+                    metric_row,
+                    benchmark_metric_columns,
+                    ["Price To Book Ratio", "Price/Book", "Price to Book", "P/B"],
+                )
+                benchmark_record["roe"] = _safe_value(
+                    metric_row,
+                    benchmark_metric_columns,
+                    ["Return On Equity-FY", "Return on Equity", "ROE"],
+                )
+                benchmark_record["moat"] = _safe_value(
+                    metric_row,
+                    benchmark_metric_columns,
+                    ["Economic Moat", "Moat"],
+                )
+                benchmark_record["uncertainty"] = _safe_value(
+                    metric_row,
+                    benchmark_metric_columns,
+                    ["Fair Value Uncertainty", "Uncertainty"],
+                )
 
         benchmark_map_isin: dict[str, Any] = {}
         benchmark_map_cusip: dict[str, Any] = {}
@@ -678,6 +1009,52 @@ def main() -> int:
                     matched_by_isin += 1
                 else:
                     matched_by_ticker += 1
+
+        return_security_ids = [
+            str(security_id).strip()
+            for security_id in [
+                _pick_value(record.get("secId"), record.get("SecId"))
+                for record in benchmark_records
+            ]
+            if security_id
+        ]
+        return_security_ids.extend(
+            str(security_id).strip()
+            for security_id in [
+                _pick_value(record.get("Id"), record.get("SecId"))
+                for record in investment_row_by_canonical_id.values()
+            ]
+            if security_id
+        )
+
+        api_return_metrics_by_security: dict[str, dict[str, float | None]] = {}
+        if return_security_ids:
+            try:
+                api_return_metrics_by_security = _fetch_return_metrics_by_security(
+                    md,
+                    return_security_ids,
+                    latest_benchmark_date,
+                    notes,
+                )
+            except Exception as exc:
+                notes.append(
+                    "API return enrichment failed; attribution will remain unavailable until returns can be pulled live. "
+                    f"Reason: {type(exc).__name__}: {exc}"
+                )
+
+        for benchmark_record in benchmark_records:
+            benchmark_security_id = _pick_value(
+                benchmark_record.get("secId"),
+                benchmark_record.get("SecId"),
+            )
+            if not benchmark_security_id:
+                continue
+
+            return_metrics = api_return_metrics_by_security.get(str(benchmark_security_id).strip(), {})
+            benchmark_record["apiReturn1M"] = return_metrics.get("apiReturn1M")
+            benchmark_record["apiReturnMtd"] = return_metrics.get("apiReturnMtd")
+            benchmark_record["apiReturnYtd"] = return_metrics.get("apiReturnYtd")
+            benchmark_record["apiReturn1Y"] = return_metrics.get("apiReturn1Y")
 
         equivalent_benchmark_requests = []
         equivalent_request_by_benchmark_isin: dict[str, Any] = {}
@@ -766,6 +1143,15 @@ def main() -> int:
             benchmark_match = benchmark_match_by_canonical_id.get(canonical_id, {})
             benchmark_row = benchmark_match.get("benchmarkRow")
             benchmark_match_method = benchmark_match.get("benchmarkMatchMethod")
+            investment_security_id = _pick_value(
+                investment_row.get("Id"),
+                investment_row.get("SecId"),
+            )
+            api_return_metrics = (
+                api_return_metrics_by_security.get(str(investment_security_id).strip(), {})
+                if investment_security_id
+                else {}
+            )
 
             benchmark_fallback_row = {}
             if benchmark_match_method == "benchmark_equivalent_name":
@@ -819,10 +1205,21 @@ def main() -> int:
                 explicit_override_result,
                 "forwardPE",
             )
+            moat_override, _ = _resolve_override_metric(
+                explicit_override_result,
+                "moat",
+            )
+            uncertainty_override, _ = _resolve_override_metric(
+                explicit_override_result,
+                "uncertainty",
+            )
 
             def ensure_adr_override_row() -> tuple[dict[str, Any], list[str]]:
                 nonlocal adr_override_row, adr_override_columns
                 if adr_override_row or adr_override_columns:
+                    return adr_override_row, adr_override_columns
+
+                if explicit_override_result is not None:
                     return adr_override_row, adr_override_columns
 
                 search_names = [
@@ -911,10 +1308,17 @@ def main() -> int:
                 allow_adr_override=True,
                 ),
             )
-            moat = metric_value("Economic Moat", "Moat", allow_adr_override=True)
-            uncertainty = metric_value(
-                "Fair Value Uncertainty",
-                "Uncertainty",
+            moat = _pick_value(
+                moat_override,
+                metric_value("Economic Moat", "Moat", allow_adr_override=True),
+            )
+            uncertainty = _pick_value(
+                uncertainty_override,
+                metric_value(
+                    "Fair Value Uncertainty",
+                    "Uncertainty",
+                    allow_adr_override=True,
+                ),
             )
             forward_pe = _pick_value(
                 forward_pe_override,
@@ -933,8 +1337,28 @@ def main() -> int:
                 "Price to Book",
                 "P/B",
             )
-            sector = metric_value("Morningstar Sector - display text", "Morningstar Sector", "Sector")
-            country = metric_value("Business Country", "Country")
+            sector = _pick_value(
+                metric_value(
+                    "Morningstar Sector - display text",
+                    "Morningstar Sector",
+                    "Sector",
+                ),
+                _pick_value(
+                    (benchmark_row or {}).get("gicsSector"),
+                    (benchmark_row or {}).get("GICS Sector"),
+                    (benchmark_row or {}).get("sector"),
+                    (benchmark_row or {}).get("Sector"),
+                ),
+            )
+            country = _pick_value(
+                metric_value("Business Country", "Country"),
+                _pick_value(
+                    (benchmark_row or {}).get("country"),
+                    (benchmark_row or {}).get("Country"),
+                    (benchmark_row or {}).get("businessCountry"),
+                    (benchmark_row or {}).get("Business Country"),
+                ),
+            )
 
             records.append(
                 {
@@ -943,6 +1367,7 @@ def main() -> int:
                         "isin": requested.get("isin"),
                         "cusip": requested.get("cusip"),
                         "sedol": requested.get("sedol"),
+                        "secid": investment_security_id,
                         "ticker": requested.get("ticker"),
                         "securityName": requested.get("securityName"),
                     },
@@ -993,6 +1418,10 @@ def main() -> int:
                     "priceToBook": price_to_book,
                     "sector": sector,
                     "country": country,
+                    "apiReturn1M": api_return_metrics.get("apiReturn1M"),
+                    "apiReturnMtd": api_return_metrics.get("apiReturnMtd"),
+                    "apiReturnYtd": api_return_metrics.get("apiReturnYtd"),
+                    "apiReturn1Y": api_return_metrics.get("apiReturn1Y"),
                 }
             )
 
@@ -1018,6 +1447,7 @@ def main() -> int:
                     "forward PE",
                     "ROE",
                     "price/book",
+                    "1M/MTD/YTD/1Y returns",
                 ],
                 "matchedByIsin": matched_by_isin,
                 "matchedByTicker": matched_by_ticker,
@@ -1049,14 +1479,14 @@ def main() -> int:
                 ],
             }
 
-        print(json.dumps(response, default=_json_default))
+        print(json.dumps(_json_safe(response), default=_json_default, allow_nan=False))
         return 0
     except Exception as exc:
         response = _build_stub_response(
             payload,
             notes + [f"Morningstar SDK request failed: {type(exc).__name__}: {exc}"],
         )
-        print(json.dumps(response, default=_json_default))
+        print(json.dumps(_json_safe(response), default=_json_default, allow_nan=False))
         return 0
 
 

@@ -2,6 +2,7 @@ import type { ParsedWorkbook } from "@/types/workbook";
 
 export type SourceRole =
   | "pmhub_portfolio"
+  | "algo_signal"
   | "presentation_example"
   | "unknown";
 
@@ -20,6 +21,13 @@ export const sourceDescriptors: SourceDescriptor[] = [
     filenamePatterns: [/^pmhub-report_/i],
     description:
       "Owned monthly PMHub holdings workbook used as the portfolio input.",
+  },
+  {
+    role: "algo_signal",
+    label: "Equity Algo",
+    filenamePatterns: [/equity algo/i],
+    description:
+      "Monthly country-level algo workbook used for country signal overlays and time-series review.",
   },
   {
     role: "presentation_example",

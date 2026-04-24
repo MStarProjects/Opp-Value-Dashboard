@@ -37,6 +37,7 @@ yarn-error.log*
 .env*
 .morningstar-session.json
 data/retention/
+data/current/
 
 # vercel
 .vercel
