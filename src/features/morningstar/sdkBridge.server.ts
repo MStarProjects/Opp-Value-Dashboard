@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-import { pmhubWorkbookContract } from "@/lib/pmhub-workbook-contract";
+import type { SleeveConfig } from "@/lib/sleeves";
 import { readMorningstarSessionToken } from "@/lib/morningstar-session";
 import type { CanonicalHolding } from "@/types/holdings";
 import type { MorningstarEnrichmentResult } from "@/types/morningstar";
@@ -22,10 +22,13 @@ interface MorningstarBridgePayload {
   holdings: MorningstarBridgePayloadHolding[];
 }
 
-function buildBridgePayload(holdings: CanonicalHolding[]): MorningstarBridgePayload {
+function buildBridgePayload(
+  holdings: CanonicalHolding[],
+  sleeveConfig: SleeveConfig,
+): MorningstarBridgePayload {
   return {
-    benchmarkInvestmentId: pmhubWorkbookContract.benchmarkInvestmentId,
-    directDataSetIdOrName: pmhubWorkbookContract.directDataSetIdOrName,
+    benchmarkInvestmentId: sleeveConfig.pmhubContract.benchmarkInvestmentId,
+    directDataSetIdOrName: sleeveConfig.pmhubContract.directDataSetIdOrName,
     includeBenchmarkHoldings: true,
     holdings: holdings.map((holding) => ({
       canonicalId: holding.canonicalId,
@@ -40,10 +43,11 @@ function buildBridgePayload(holdings: CanonicalHolding[]): MorningstarBridgePayl
 
 export async function runMorningstarSdkEnrichment(
   holdings: CanonicalHolding[],
+  sleeveConfig: SleeveConfig,
 ): Promise<MorningstarEnrichmentResult> {
   const pythonExecutable = process.env.MORNINGSTAR_PYTHON_PATH || "python";
   const scriptPath = path.join(process.cwd(), "scripts", "morningstar_sdk_bridge.py");
-  const payload = JSON.stringify(buildBridgePayload(holdings));
+  const payload = JSON.stringify(buildBridgePayload(holdings, sleeveConfig));
   const savedToken = await readMorningstarSessionToken();
   const shouldEnableSdk = process.env.MORNINGSTAR_ENABLE_SDK === "true" || Boolean(savedToken);
 

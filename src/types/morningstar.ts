@@ -26,6 +26,7 @@ export interface MorningstarEnrichmentRecord {
   roe?: number;
   priceToBook?: number;
   sector?: string;
+  industry?: string;
   country?: string;
   apiReturn1M?: number;
   apiReturnMtd?: number;

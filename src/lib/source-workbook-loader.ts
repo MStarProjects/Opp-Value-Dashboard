@@ -2,7 +2,11 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { parseWorkbookData } from "@/features/workbook/parseWorkbook";
-import { pickLatestWorkbooksByRole, type SourceRole } from "@/lib/data-sources";
+import {
+  detectSourceRole,
+  pickLatestWorkbooksByRole,
+  type SourceRole,
+} from "@/lib/data-sources";
 import { loadCurrentWorkbooks } from "@/lib/current-workbook-store";
 import type { ParsedWorkbook } from "@/types/workbook";
 
@@ -13,12 +17,29 @@ export interface LoadedWorkbookInput {
   origin: "raw" | "current" | "upload";
 }
 
-async function loadRawWorkbookInputs(): Promise<LoadedWorkbookInput[]> {
+interface LoadWorkbookInputOptions {
+  roles?: SourceRole[];
+}
+
+async function loadRawWorkbookInputs(
+  options?: LoadWorkbookInputOptions,
+): Promise<LoadedWorkbookInput[]> {
   const dataDir = path.join(process.cwd(), "data", "raw");
+  const allowedRoles = options?.roles ? new Set(options.roles) : undefined;
 
   try {
     const fileNames = await readdir(dataDir);
-    const excelFiles = fileNames.filter((fileName) => /\.xlsx?$/i.test(fileName));
+    const excelFiles = fileNames.filter((fileName) => {
+      if (!/\.xlsx?$/i.test(fileName)) {
+        return false;
+      }
+
+      if (!allowedRoles) {
+        return true;
+      }
+
+      return allowedRoles.has(detectSourceRole(fileName));
+    });
     const buffers = await Promise.all(
       excelFiles.map(async (fileName) => {
         const buffer = new Uint8Array(await readFile(path.join(dataDir, fileName)));
@@ -46,17 +67,20 @@ function selectLatestInputs(inputs: LoadedWorkbookInput[]) {
     .filter((input): input is LoadedWorkbookInput => Boolean(input));
 }
 
-export async function loadActiveWorkbookInputs() {
+export async function loadActiveWorkbookInputs(options?: LoadWorkbookInputOptions) {
+  const allowedRoles = options?.roles ? new Set(options.roles) : undefined;
   const [currentInputs, rawInputs] = await Promise.all([
     loadCurrentWorkbooks(),
-    loadRawWorkbookInputs(),
+    loadRawWorkbookInputs(options),
   ]);
 
-  const parsedCurrentInputs: LoadedWorkbookInput[] = currentInputs.map((input) => ({
-    ...input,
-    workbook: parseWorkbookData(input.fileName, input.buffer),
-    origin: "current",
-  }));
+  const parsedCurrentInputs: LoadedWorkbookInput[] = currentInputs
+    .filter((input) => !allowedRoles || allowedRoles.has(input.role))
+    .map((input) => ({
+      ...input,
+      workbook: parseWorkbookData(input.fileName, input.buffer),
+      origin: "current",
+    }));
 
   const currentRoles = new Set(parsedCurrentInputs.map((input) => input.workbook.sourceRole));
   const combinedInputs = [

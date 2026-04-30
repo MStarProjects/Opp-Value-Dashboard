@@ -3,7 +3,14 @@ import path from "node:path";
 
 import type { SourceRole } from "@/lib/data-sources";
 
-type PersistableSourceRole = Extract<SourceRole, "pmhub_portfolio" | "algo_signal">;
+type PersistableSourceRole = Extract<
+  SourceRole,
+  | "pmhub_global_xus"
+  | "pmhub_us_opp"
+  | "pmhub_consumer"
+  | "pmhub_dividend"
+  | "algo_signal"
+>;
 
 const currentWorkbookRootPath = path.join(process.cwd(), "data", "current");
 const currentWorkbookManifestPath = path.join(currentWorkbookRootPath, "manifest.json");
@@ -35,7 +42,13 @@ function sanitizeFileNameSegment(value: string) {
 }
 
 function isPersistableSourceRole(role: SourceRole): role is PersistableSourceRole {
-  return role === "pmhub_portfolio" || role === "algo_signal";
+  return (
+    role === "pmhub_global_xus" ||
+    role === "pmhub_us_opp" ||
+    role === "pmhub_consumer" ||
+    role === "pmhub_dividend" ||
+    role === "algo_signal"
+  );
 }
 
 async function readManifest(): Promise<CurrentWorkbookManifest> {

@@ -247,6 +247,7 @@ def _build_default_data_points(as_of_date: str) -> list[dict[str, Any]]:
     return [
         {"datapointId": "OS603", "startDate": as_of_date, "endDate": as_of_date},
         {"datapointId": "LT181", "startDate": as_of_date, "endDate": as_of_date},
+        {"datapointId": "LT735"},
         {"datapointId": "ST201", "startDate": as_of_date, "endDate": as_of_date},
         {"datapointId": "LA03Z"},
         {"datapointId": "BC001"},
@@ -261,6 +262,31 @@ def _build_override_data_points(as_of_date: str) -> list[dict[str, Any]]:
         {"datapointId": "OS603"},
         {"datapointId": "ST198"},
     ]
+
+
+def _ensure_required_data_points(
+    data_points: Any, as_of_date: str
+) -> list[dict[str, Any]]:
+    if isinstance(data_points, pd.DataFrame):
+        normalized_points = data_points.to_dict(orient="records")
+    elif isinstance(data_points, list):
+        normalized_points = list(data_points)
+    else:
+        normalized_points = []
+
+    existing_ids = {
+        str(data_point.get("datapointId", "")).strip()
+        for data_point in normalized_points
+        if isinstance(data_point, dict)
+    }
+
+    for required_data_point in _build_default_data_points(as_of_date):
+        required_id = str(required_data_point.get("datapointId", "")).strip()
+        if required_id and required_id not in existing_ids:
+            normalized_points.append(required_data_point)
+            existing_ids.add(required_id)
+
+    return normalized_points
 
 
 def _build_return_period_window(end_date: str) -> dict[str, pd.Timestamp]:
@@ -639,6 +665,7 @@ def _build_stub_response(payload: dict[str, Any], notes: list[str]) -> dict[str,
                 "economic moat",
                 "fair value uncertainty",
                 "sector",
+                "gics industry",
                 "business country",
                 "forward PE",
                 "ROE",
@@ -758,7 +785,12 @@ def main() -> int:
             data_points = _build_default_data_points(latest_benchmark_date)
             notes.append(
                 "Using direct Morningstar datapoints for PFV, moat, uncertainty, sector, "
-                "business country, ROE, forward P/E, and price/book."
+                "industry, business country, ROE, forward P/E, and price/book."
+            )
+        else:
+            data_points = _ensure_required_data_points(data_points, latest_benchmark_date)
+            notes.append(
+                "Augmented the saved Direct data set with required live datapoints, including Morningstar Industry."
             )
 
         override_metrics_by_secid: dict[str, dict[str, Any]] = {}
@@ -897,6 +929,22 @@ def main() -> int:
                     benchmark_record.get("GICS Sector"),
                     benchmark_record.get("sector"),
                     benchmark_record.get("Sector"),
+                )
+                benchmark_record["industry"] = _pick_value(
+                    _safe_value(
+                        metric_row,
+                        benchmark_metric_columns,
+                        [
+                            "GICS Industry - display text",
+                            "GICS Industry",
+                            "Morningstar Industry",
+                            "Industry",
+                        ],
+                    ),
+                    benchmark_record.get("gicsIndustry"),
+                    benchmark_record.get("GICS Industry"),
+                    benchmark_record.get("industry"),
+                    benchmark_record.get("Industry"),
                 )
                 benchmark_record["priceToFairValue"] = _pick_value(
                     benchmark_pfv_override,
@@ -1350,6 +1398,20 @@ def main() -> int:
                     (benchmark_row or {}).get("Sector"),
                 ),
             )
+            industry = _pick_value(
+                metric_value(
+                    "GICS Industry - display text",
+                    "GICS Industry",
+                    "Morningstar Industry",
+                    "Industry",
+                ),
+                _pick_value(
+                    (benchmark_row or {}).get("gicsIndustry"),
+                    (benchmark_row or {}).get("GICS Industry"),
+                    (benchmark_row or {}).get("industry"),
+                    (benchmark_row or {}).get("Industry"),
+                ),
+            )
             country = _pick_value(
                 metric_value("Business Country", "Country"),
                 _pick_value(
@@ -1417,6 +1479,7 @@ def main() -> int:
                     "roe": roe,
                     "priceToBook": price_to_book,
                     "sector": sector,
+                    "industry": industry,
                     "country": country,
                     "apiReturn1M": api_return_metrics.get("apiReturn1M"),
                     "apiReturnMtd": api_return_metrics.get("apiReturnMtd"),
@@ -1443,6 +1506,7 @@ def main() -> int:
                     "economic moat",
                     "fair value uncertainty",
                     "sector",
+                    "gics industry",
                     "business country",
                     "forward PE",
                     "ROE",

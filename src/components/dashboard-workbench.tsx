@@ -7,7 +7,8 @@ import {
   buildCountryExposure,
   buildSectorExposure,
 } from "@/features/calculations/sectorAggregation";
-import type { AlgoCountrySeries } from "@/types/algo";
+import { getSleeveConfig, sleeveOrder, type SleeveId } from "@/lib/sleeves";
+import type { AlgoSeriesRow } from "@/types/algo";
 import type { DashboardState } from "@/types/dashboard";
 import type { CanonicalHolding } from "@/types/holdings";
 import type { ExposureRow } from "@/types/metrics";
@@ -17,12 +18,14 @@ type UploadTarget = "pmhub" | "algo";
 type SortDirection = "asc" | "desc";
 type TableZoom = 100 | 90 | 80 | 70;
 type AttributionPeriod = "1M" | "MTD" | "YTD" | "1Y";
+type DetailVariant = "global_xus" | "us_opp";
 
 type LookthroughColumnKey =
   | "securityName"
   | "isin"
   | "country"
   | "sector"
+  | "industry"
   | "targetWeight"
   | "benchmarkWeight"
   | "priceToFairValue"
@@ -65,10 +68,67 @@ interface ComparisonDistributionRow {
   benchmarkWeight: number;
 }
 
-type AlgoCountryDisplayRow = ExposureRow;
+interface ScatterPointRow {
+  label: string;
+  x: number;
+  y: number;
+  size: number;
+  category?: string;
+  meta?: string;
+}
+
+interface SpreadRow {
+  label: string;
+  portfolioWeight: number;
+  benchmarkWeight: number;
+  activeWeight: number;
+  portfolioPfv?: number;
+  benchmarkPfv?: number;
+  cheapnessSpread?: number;
+}
+
+interface OpportunityBoardRow {
+  label: string;
+  sector: string;
+  country: string;
+  portfolioWeight: number;
+  benchmarkWeight: number;
+  activeWeight: number;
+  priceToFairValue?: number;
+  upside?: number;
+  moat?: string;
+  forwardPE?: number;
+  roe?: number;
+}
+
+interface OverlapBreakdownRow {
+  label: string;
+  portfolioWeight: number;
+  benchmarkWeight: number;
+  count: number;
+  colorClassName: string;
+}
+
+interface QualityMatrixCell {
+  moat: string;
+  pfvBucket: string;
+  activeWeight: number;
+}
+
+type PositionDisplayRow = ExposureRow;
+
+interface IndustryPositionRow {
+  label: string;
+  sector: string;
+  portfolioWeight: number;
+  benchmarkWeight: number;
+  activeVsBenchmark: number;
+}
+
+type IndustrySortKey = "active" | "sector";
 
 interface AlgoHoverPoint {
-  country: string;
+  label: string;
   dateLabel: string;
   value: number;
   color: string;
@@ -76,8 +136,8 @@ interface AlgoHoverPoint {
   y: number;
 }
 
-const lookthroughColumns: LookthroughColumn[] = [
-  {
+const lookthroughColumnDefinitions: Record<LookthroughColumnKey, LookthroughColumn> = {
+  securityName: {
     key: "securityName",
     label: "Stock",
     minWidth: "min-w-[11rem]",
@@ -91,14 +151,14 @@ const lookthroughColumns: LookthroughColumn[] = [
       </div>
     ),
   },
-  {
+  isin: {
     key: "isin",
     label: "ISIN",
     minWidth: "min-w-[7.5rem]",
     getValue: (holding) => holding.isin,
     render: (holding) => holding.isin ?? "n/a",
   },
-  {
+  country: {
     key: "country",
     label: "Country",
     minWidth: "min-w-[6rem]",
@@ -109,7 +169,7 @@ const lookthroughColumns: LookthroughColumn[] = [
       </div>
     ),
   },
-  {
+  sector: {
     key: "sector",
     label: "Sector",
     minWidth: "min-w-[8rem]",
@@ -120,7 +180,18 @@ const lookthroughColumns: LookthroughColumn[] = [
       </div>
     ),
   },
-  {
+  industry: {
+    key: "industry",
+    label: "GICS Industry",
+    minWidth: "min-w-[9rem]",
+    getValue: (holding) => holding.industry,
+    render: (holding) => (
+      <div className="w-[9rem] truncate" title={holding.industry ?? "Unknown"}>
+        {holding.industry ?? "Unknown"}
+      </div>
+    ),
+  },
+  targetWeight: {
     key: "targetWeight",
     label: "Opp Value Weight",
     align: "right",
@@ -128,7 +199,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.targetWeight,
     render: (holding) => renderWeightCell(holding.targetWeight),
   },
-  {
+  benchmarkWeight: {
     key: "benchmarkWeight",
     label: "Weight Benchmark",
     align: "right",
@@ -136,7 +207,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.benchmarkWeight,
     render: (holding) => renderWeightCell(holding.benchmarkWeight),
   },
-  {
+  priceToFairValue: {
     key: "priceToFairValue",
     label: "MER P/Fair Value",
     align: "right",
@@ -144,7 +215,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.priceToFairValue,
     render: (holding) => formatNumber(holding.priceToFairValue),
   },
-  {
+  upsideToFairValue: {
     key: "upsideToFairValue",
     label: "Upside MER V",
     align: "right",
@@ -152,7 +223,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.upsideToFairValue,
     render: (holding) => renderUpsideCell(holding.upsideToFairValue),
   },
-  {
+  forwardPE: {
     key: "forwardPE",
     label: "Forw PE",
     align: "right",
@@ -160,7 +231,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.forwardPE,
     render: (holding) => formatNumber(holding.forwardPE),
   },
-  {
+  priceToBook: {
     key: "priceToBook",
     label: "P/B",
     align: "right",
@@ -168,7 +239,7 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.priceToBook,
     render: (holding) => formatNumber(holding.priceToBook),
   },
-  {
+  roe: {
     key: "roe",
     label: "RO",
     align: "right",
@@ -176,33 +247,80 @@ const lookthroughColumns: LookthroughColumn[] = [
     getValue: (holding) => holding.roe,
     render: (holding) => formatRoeCell(holding.roe),
   },
-  {
+  moat: {
     key: "moat",
     label: "M* MD Rating",
     minWidth: "min-w-[5rem]",
     getValue: (holding) => holding.moat,
     render: (holding) => holding.moat ?? "Unknown",
   },
-  {
+  uncertainty: {
     key: "uncertainty",
     label: "Fair Value Uncertainty",
     minWidth: "min-w-[6rem]",
     getValue: (holding) => holding.uncertainty,
     render: (holding) => holding.uncertainty ?? "Unknown",
   },
-];
+};
 
-const defaultVisibleColumnKeys: LookthroughColumnKey[] = lookthroughColumns.map(
-  (column) => column.key,
-);
+const lookthroughColumnSets: Record<DetailVariant, LookthroughColumnKey[]> = {
+  global_xus: [
+    "securityName",
+    "isin",
+    "country",
+    "sector",
+    "targetWeight",
+    "benchmarkWeight",
+    "priceToFairValue",
+    "upsideToFairValue",
+    "forwardPE",
+    "priceToBook",
+    "roe",
+    "moat",
+    "uncertainty",
+  ],
+  us_opp: [
+    "securityName",
+    "isin",
+    "sector",
+    "industry",
+    "targetWeight",
+    "benchmarkWeight",
+    "priceToFairValue",
+    "upsideToFairValue",
+    "forwardPE",
+    "priceToBook",
+    "roe",
+    "moat",
+    "uncertainty",
+  ],
+};
+
+function getLookthroughColumns(variant: DetailVariant) {
+  return lookthroughColumnSets[variant].map(
+    (columnKey) => lookthroughColumnDefinitions[columnKey],
+  );
+}
+
+function getDefaultVisibleColumnKeys(variant: DetailVariant) {
+  return [...lookthroughColumnSets[variant]];
+}
+
+const globalDefaultVisibleColumnKeys = getDefaultVisibleColumnKeys("global_xus");
 const tableZoomOptions: TableZoom[] = [100, 90, 80, 70];
+
 
 export function DashboardWorkbench({
   initialState,
 }: Readonly<{
   initialState: DashboardState;
 }>) {
-  const [dashboardState, setDashboardState] = useState<DashboardState>(initialState);
+  const [activeSleeve, setActiveSleeve] = useState<SleeveId>(initialState.sleeveId);
+  const [dashboardStatesBySleeve, setDashboardStatesBySleeve] = useState<
+    Partial<Record<SleeveId, DashboardState>>
+  >({
+    [initialState.sleeveId]: initialState,
+  });
   const [activeTab, setActiveTab] = useState<DashboardTab>("summary");
   const [tokenValue, setTokenValue] = useState("");
   const [tokenStatus, setTokenStatus] = useState<string>();
@@ -210,6 +328,7 @@ export function DashboardWorkbench({
     "neutral" | "success" | "error"
   >("neutral");
   const [error, setError] = useState<string>();
+  const [isLoadingSleeve, setIsLoadingSleeve] = useState(false);
   const [isUploadingPmhub, setIsUploadingPmhub] = useState(false);
   const [isUploadingAlgo, setIsUploadingAlgo] = useState(false);
   const [isSavingToken, setIsSavingToken] = useState(false);
@@ -219,10 +338,13 @@ export function DashboardWorkbench({
     Partial<Record<LookthroughColumnKey, string>>
   >({});
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<LookthroughColumnKey[]>(
-    defaultVisibleColumnKeys,
+    globalDefaultVisibleColumnKeys,
   );
   const [tableZoom, setTableZoom] = useState<TableZoom>(90);
   const [isExportingLookthrough, setIsExportingLookthrough] = useState(false);
+  const dashboardState = dashboardStatesBySleeve[activeSleeve] ?? initialState;
+  const activeSleeveConfig = getSleeveConfig(activeSleeve);
+  const lookthroughColumns = getLookthroughColumns(activeSleeveConfig.detailVariant);
 
   useEffect(() => {
     if (!tokenStatus) {
@@ -241,6 +363,41 @@ export function DashboardWorkbench({
     const timeout = window.setTimeout(() => setError(undefined), 4200);
     return () => window.clearTimeout(timeout);
   }, [error]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialSleeve() {
+      if (dashboardStatesBySleeve[activeSleeve]?.detailRows.length) {
+        return;
+      }
+
+      try {
+        setIsLoadingSleeve(true);
+        await requestSleeveState(activeSleeve, { method: "POST" });
+      } catch (caughtError) {
+        if (cancelled) {
+          return;
+        }
+
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Unable to load the requested sleeve.",
+        );
+      } finally {
+        if (!cancelled) {
+          setIsLoadingSleeve(false);
+        }
+      }
+    }
+
+    void loadInitialSleeve();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSleeve, dashboardStatesBySleeve]);
 
   const visibleColumns = lookthroughColumns.filter((column) =>
     visibleColumnKeys.includes(column.key),
@@ -287,6 +444,73 @@ export function DashboardWorkbench({
         ? String(leftValue).localeCompare(String(rightValue))
         : String(rightValue).localeCompare(String(leftValue));
     });
+
+  async function requestSleeveState(
+    sleeveId: SleeveId,
+    requestInit?: RequestInit,
+    reason = "sleeve_switch",
+    extraParams?: Record<string, string>,
+  ) {
+    const searchParams = new URLSearchParams({
+      sleeve: sleeveId,
+      reason,
+      ...(extraParams ?? {}),
+    });
+    const response = await fetch(`/api/dashboard-state?${searchParams.toString()}`, requestInit ?? { method: "POST" });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(payload.error ?? "Unable to load the sleeve dashboard.");
+    }
+
+    const nextState = (await response.json()) as DashboardState;
+    setDashboardStatesBySleeve((current) => ({
+      ...current,
+      [sleeveId]: nextState,
+    }));
+    return nextState;
+  }
+
+  async function handleSleeveSelect(nextSleeve: SleeveId) {
+    if (nextSleeve === activeSleeve) {
+      return;
+    }
+
+    setError(undefined);
+
+    if (dashboardStatesBySleeve[nextSleeve]) {
+      const nextSleeveConfig = getSleeveConfig(nextSleeve);
+      setVisibleColumnKeys(getDefaultVisibleColumnKeys(nextSleeveConfig.detailVariant));
+      setColumnFilters({});
+      setSortKey("targetWeight");
+      setSortDirection("desc");
+      setActiveSleeve(nextSleeve);
+      setActiveTab("summary");
+      return;
+    }
+
+    try {
+      setIsLoadingSleeve(true);
+      await requestSleeveState(nextSleeve, { method: "POST" });
+      const nextSleeveConfig = getSleeveConfig(nextSleeve);
+      setVisibleColumnKeys(getDefaultVisibleColumnKeys(nextSleeveConfig.detailVariant));
+      setColumnFilters({});
+      setSortKey("targetWeight");
+      setSortDirection("desc");
+      setActiveSleeve(nextSleeve);
+      setActiveTab("summary");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to load the requested sleeve.",
+      );
+    } finally {
+      setIsLoadingSleeve(false);
+    }
+  }
 
   async function handleExportLookthrough() {
     try {
@@ -353,20 +577,15 @@ export function DashboardWorkbench({
       const formData = new FormData();
       formData.set("file", file);
 
-      const response = await fetch("/api/dashboard-state?reason=manual_upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(payload.error ?? "Unable to rebuild dashboard state.");
-      }
-
-      const nextState = (await response.json()) as DashboardState;
-      setDashboardState(nextState);
+      await requestSleeveState(
+        activeSleeve,
+        {
+          method: "POST",
+          body: formData,
+        },
+        "manual_upload",
+        { uploadTarget },
+      );
       setTokenStatus(uploadTarget === "pmhub" ? "PMHub workbook loaded." : "Algo workbook loaded.");
       setTokenStatusTone("success");
       setActiveTab(uploadTarget === "pmhub" ? "details" : "algo");
@@ -386,18 +605,7 @@ export function DashboardWorkbench({
   }
 
   async function refreshLiveData() {
-    const refreshResponse = await fetch("/api/dashboard-state?reason=token_refresh", {
-      method: "POST",
-    });
-
-    if (!refreshResponse.ok) {
-      const payload = (await refreshResponse.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      throw new Error(payload.error ?? "Unable to refresh dashboard state.");
-    }
-
-    return (await refreshResponse.json()) as DashboardState;
+    return requestSleeveState(activeSleeve, { method: "POST" }, "token_refresh");
   }
 
   async function handleTokenSave() {
@@ -429,7 +637,6 @@ export function DashboardWorkbench({
       }
 
       const nextState = await refreshLiveData();
-      setDashboardState(nextState);
       setTokenValue("");
 
       if (nextState.enrichmentAudit.status === "configured") {
@@ -487,7 +694,7 @@ export function DashboardWorkbench({
         return nextVisibleColumnKeys;
       }
 
-      return defaultVisibleColumnKeys.filter(
+      return getDefaultVisibleColumnKeys(activeSleeveConfig.detailVariant).filter(
         (key) => current.includes(key) || key === columnKey,
       );
     });
@@ -507,14 +714,30 @@ export function DashboardWorkbench({
       />
 
       <div className="mx-auto flex w-full max-w-[1720px] flex-col gap-4">
+        <section className="rounded-[1rem] border border-stone-200/80 bg-white/92 p-2 shadow-[0_10px_20px_rgba(59,47,33,0.05)]">
+          <div className="flex flex-wrap gap-2">
+            {sleeveOrder.map((sleeveId) => {
+              const sleeve = getSleeveConfig(sleeveId);
+              return (
+                <TabButton
+                  key={sleeveId}
+                  label={sleeve.tabLabel}
+                  isActive={activeSleeve === sleeveId}
+                  onClick={() => void handleSleeveSelect(sleeveId)}
+                />
+              );
+            })}
+          </div>
+        </section>
+
         <section className="max-w-[980px] rounded-[1.1rem] border border-white/60 bg-[linear-gradient(135deg,_rgba(15,23,42,0.98)_0%,_rgba(30,41,59,0.96)_62%,_rgba(120,53,15,0.86)_100%)] px-5 py-4 text-white shadow-[0_14px_28px_rgba(32,26,19,0.12)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-1.5">
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200/90">
-                Equity Sleeve Dashboard
+                {activeSleeveConfig.eyebrow}
               </p>
               <h1 className="font-serif text-[1.95rem] leading-none tracking-[-0.05em] md:text-[3.1rem]">
-                Global xUS Opportunistic Value
+                {activeSleeveConfig.title}
               </h1>
             </div>
 
@@ -600,6 +823,12 @@ export function DashboardWorkbench({
                     {dashboardState.enrichmentAudit.benchmarkConstituentCount}
                   </strong>
                 </span>
+                {isLoadingSleeve ? (
+                  <span>
+                    Sleeve:{" "}
+                    <strong className="font-semibold text-white">Loading…</strong>
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -626,15 +855,19 @@ export function DashboardWorkbench({
         </section>
 
         {activeTab === "summary" ? (
-          <SummaryTab dashboardState={dashboardState} />
+          <SummaryTab
+            dashboardState={dashboardState}
+            sleeveId={activeSleeve}
+          />
         ) : activeTab === "algo" ? (
           <AlgoTab
-            key={dashboardState.algo.sourceFileName ?? dashboardState.algo.latestDateKey ?? "algo"}
+            key={`${activeSleeve}-${dashboardState.algo.sourceFileName ?? dashboardState.algo.latestDateKey ?? "algo"}`}
             dashboardState={dashboardState}
           />
         ) : (
           <LookthroughTab
             holdings={filteredAndSortedDetailRows}
+            allColumns={lookthroughColumns}
             visibleColumns={visibleColumns}
             visibleColumnKeys={visibleColumnKeys}
             sortKey={sortKey}
@@ -656,11 +889,17 @@ export function DashboardWorkbench({
 
 function SummaryTab({
   dashboardState,
+  sleeveId,
 }: Readonly<{
   dashboardState: DashboardState;
+  sleeveId: SleeveId;
 }>) {
   const [attributionPeriod, setAttributionPeriod] =
     useState<AttributionPeriod>("MTD");
+  const [industrySortKey, setIndustrySortKey] = useState<IndustrySortKey>("active");
+  const [industrySortDirection, setIndustrySortDirection] =
+    useState<SortDirection>("desc");
+  const sleeveConfig = getSleeveConfig(sleeveId);
   const portfolioHoldings = dashboardState.holdings;
   const joinedHoldings = buildSummaryUniverseRows(dashboardState.detailRows);
   const portfolioSnapshot = buildWeightedMetricsSnapshot(
@@ -718,19 +957,57 @@ function SummaryTab({
     },
   ];
   const sectorRows = buildSectorExposure(joinedHoldings);
-  const countryRows = buildCountryRowsWithAlgo(
+  const countryRows = buildRowsWithAlgo(
     buildCountryExposure(joinedHoldings),
     dashboardState.algo.rows,
   );
+  const showAttribution =
+    sleeveConfig.id !== "global_xus" && sleeveConfig.id !== "us_opp";
+  const sectorRowsWithAlgo = buildRowsWithAlgo(
+    sectorRows,
+    dashboardState.algo.rows,
+  );
+  const industryRows = buildIndustryPositionRows(joinedHoldings).sort((left, right) => {
+    if (industrySortKey === "sector") {
+      const sectorCompare =
+        left.sector.localeCompare(right.sector) ||
+        left.label.localeCompare(right.label);
+
+      return industrySortDirection === "asc" ? sectorCompare : -sectorCompare;
+    }
+
+    const activeCompare = left.activeVsBenchmark - right.activeVsBenchmark;
+    if (activeCompare === 0) {
+      return left.label.localeCompare(right.label);
+    }
+
+    return industrySortDirection === "asc" ? activeCompare : -activeCompare;
+  });
   const moatRows = buildCategoryComparisonRows(joinedHoldings, (holding) => holding.moat);
-  const qualityRows = buildQualityDistributionRows(joinedHoldings);
-  const attributionRows = buildAttributionRows(joinedHoldings, attributionPeriod);
-  const positiveAttributionRows = attributionRows
-    .filter((row) => row.value > 0)
-    .slice(0, 8);
-  const negativeAttributionRows = attributionRows
-    .filter((row) => row.value < 0)
-    .slice(0, 8);
+  const convictionRows = buildConvictionValuationRows(joinedHoldings);
+  const returnScatterRows = buildReturnVsActiveRows(joinedHoldings, "1Y");
+  const sectorSpreadRows = buildValuationSpreadRows(joinedHoldings, (holding) => holding.sector);
+  const countrySpreadRows =
+    sleeveConfig.secondaryExposureType === "country"
+      ? buildValuationSpreadRows(joinedHoldings, (holding) => holding.country)
+      : [];
+  const benchmarkOpportunityRows = buildBenchmarkOpportunityRows(joinedHoldings);
+  const offBenchmarkIdeaRows = buildOffBenchmarkIdeaRows(joinedHoldings);
+  const overlapRows = buildOverlapBreakdownRows(joinedHoldings);
+  const qualityMatrixCells = buildQualityMatrixCells(joinedHoldings);
+  const activeRiskRows = buildActiveRiskRows(joinedHoldings);
+  const attributionRows = showAttribution
+    ? buildAttributionRows(joinedHoldings, attributionPeriod)
+    : [];
+  const positiveAttributionRows = showAttribution
+    ? attributionRows.filter((row) => row.value > 0).slice(0, 8)
+    : [];
+  const negativeAttributionRows = showAttribution
+    ? attributionRows.filter((row) => row.value < 0).slice(0, 8)
+    : [];
+  const attributionNarrative = showAttribution
+    ? buildAttributionNarrative(attributionRows, attributionPeriod)
+    : undefined;
 
   const benchmarkConnectionRows = [
     { label: "Status", value: dashboardState.enrichmentAudit.status },
@@ -765,56 +1042,158 @@ function SummaryTab({
         </div>
       </Section>
 
-      <Section title="Sector & Country">
+      <Section
+        title={
+          sleeveConfig.secondaryExposureType === "country"
+            ? "Sector & Country"
+            : "Sector & Industry"
+        }
+      >
         <div className="flex flex-col gap-4">
-          <CompactExposureCard
-            title="Sector Position"
-            rows={sectorRows}
-            columnCountClassName="md:grid-cols-2"
-          />
-          <CountryPositionCard
-            title="Country Position"
-            rows={countryRows}
-            hasAlgo={dashboardState.algo.available}
-          />
+          {sleeveConfig.secondaryExposureType === "country" ? (
+            <>
+              <CompactExposureCard
+                title="Sector Position"
+                rows={sectorRows}
+                columnCountClassName="md:grid-cols-2"
+              />
+              <PositionComparisonCard
+                title={sleeveConfig.secondaryExposureTitle}
+                rows={countryRows}
+                hasAlgo={dashboardState.algo.available}
+                primaryLabel="Country"
+              />
+            </>
+          ) : (
+            <>
+              <PositionComparisonCard
+                title="Sector Position"
+                rows={sectorRowsWithAlgo}
+                hasAlgo={dashboardState.algo.available}
+                primaryLabel="Sector"
+              />
+              <IndustryPositionCard
+                title={sleeveConfig.secondaryExposureTitle}
+                rows={industryRows}
+                sortKey={industrySortKey}
+                sortDirection={industrySortDirection}
+                onSortKeyChange={(nextKey) => {
+                  if (nextKey === industrySortKey) {
+                    setIndustrySortDirection((current) =>
+                      current === "asc" ? "desc" : "asc",
+                    );
+                    return;
+                  }
+
+                  setIndustrySortKey(nextKey);
+                  setIndustrySortDirection(nextKey === "sector" ? "asc" : "desc");
+                }}
+              />
+            </>
+          )}
         </div>
       </Section>
 
-      <Section title="Moat & Quality">
+      <Section title="Moat">
+        <DistributionComparisonCard title="Moat" rows={moatRows} />
+      </Section>
+
+      <Section title="Conviction & Opportunity">
         <div className="grid gap-4 xl:grid-cols-2">
-          <DistributionComparisonCard title="Moat" rows={moatRows} />
-          <DistributionComparisonCard title="Quality" rows={qualityRows} />
+          <ScatterInsightCard
+            title="Conviction vs Valuation"
+            subtitle="Active weight vs upside to fair value"
+            xLabel="Active Weight"
+            yLabel="Upside"
+            points={convictionRows}
+          />
+          <ScatterInsightCard
+            title="Return vs Active Weight"
+            subtitle="1Y Morningstar return vs active weight"
+            xLabel="Active Weight"
+            yLabel="1Y Return"
+            points={returnScatterRows}
+          />
         </div>
       </Section>
 
-      <Section title="Attribution">
-        <div className="flex flex-wrap gap-2">
-          {(["1M", "MTD", "YTD", "1Y"] as AttributionPeriod[]).map((period) => (
-            <button
-              key={period}
-              type="button"
-              onClick={() => setAttributionPeriod(period)}
-              className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                attributionPeriod === period
-                  ? "bg-stone-950 text-white"
-                  : "border border-stone-300 bg-white text-stone-700 hover:bg-stone-100"
-              }`}
-            >
-              {period}
-            </button>
-          ))}
-        </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <AttributionCard
-            title={`${attributionPeriod} Contributors`}
-            rows={positiveAttributionRows}
+      <Section title="Valuation Spread">
+        <div className="flex flex-col gap-4">
+          <ValuationSpreadCard
+            title="Sector Valuation Spread"
+            subtitle="Positive spread means the portfolio is cheaper than benchmark on P/FV"
+            rows={sectorSpreadRows}
           />
-          <AttributionCard
-            title={`${attributionPeriod} Detractors`}
-            rows={negativeAttributionRows}
+          {countrySpreadRows.length > 0 ? (
+            <ValuationSpreadCard
+              title="Country Valuation Spread"
+              subtitle="Positive spread means the portfolio is cheaper than benchmark on P/FV"
+              rows={countrySpreadRows}
+            />
+          ) : null}
+        </div>
+      </Section>
+
+      <Section title="Structure & Risk">
+        <div className="flex flex-col gap-4">
+          <QualityMatrixCard cells={qualityMatrixCells} />
+          <ActiveRiskTreemapCard rows={activeRiskRows} />
+          <OverlapBreakdownCard rows={overlapRows} />
+        </div>
+      </Section>
+
+      <Section title="Idea Boards">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <OpportunityBoardCard
+            title="Benchmark Opportunity Board"
+            subtitle="Benchmark names not owned, ranked by benchmark weight and upside"
+            rows={benchmarkOpportunityRows}
+            weightLabel="Bmk"
+          />
+          <OpportunityBoardCard
+            title="Off-Benchmark Conviction Board"
+            subtitle="Owned names outside the benchmark"
+            rows={offBenchmarkIdeaRows}
+            weightLabel="Port"
           />
         </div>
       </Section>
+
+      {showAttribution ? (
+        <Section title="Attribution">
+          <div className="flex flex-wrap gap-2">
+            {(["1M", "MTD", "YTD", "1Y"] as AttributionPeriod[]).map((period) => (
+              <button
+                key={period}
+                type="button"
+                onClick={() => setAttributionPeriod(period)}
+                className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                  attributionPeriod === period
+                    ? "bg-stone-950 text-white"
+                    : "border border-stone-300 bg-white text-stone-700 hover:bg-stone-100"
+                }`}
+              >
+                {period}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <AttributionCard
+              title={`${attributionPeriod} Contributors`}
+              rows={positiveAttributionRows}
+            />
+            <AttributionCard
+              title={`${attributionPeriod} Detractors`}
+              rows={negativeAttributionRows}
+            />
+          </div>
+          {attributionNarrative ? (
+            <p className="mt-4 rounded-[0.9rem] border border-stone-200 bg-white px-4 py-3 text-sm leading-6 text-stone-700">
+              {attributionNarrative}
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
 
       <Section title="Benchmark Connection">
         <KeyValueTable rows={benchmarkConnectionRows} />
@@ -828,11 +1207,11 @@ function AlgoTab({
 }: Readonly<{
   dashboardState: DashboardState;
 }>) {
-  const availableCountries = [
-    ...new Set(dashboardState.algo.rows.map((row) => row.country)),
+  const availableLabels = [
+    ...new Set(dashboardState.algo.rows.map((row) => row.label)),
   ].sort((left, right) => left.localeCompare(right));
-  const [selectedCountries, setSelectedCountries] =
-    useState<string[]>(availableCountries);
+  const [selectedLabels, setSelectedLabels] =
+    useState<string[]>(availableLabels);
 
   if (!dashboardState.algo.available) {
     return (
@@ -845,7 +1224,7 @@ function AlgoTab({
   }
 
   const filteredRows = dashboardState.algo.rows.filter((row) =>
-    selectedCountries.includes(row.country),
+    selectedLabels.includes(row.label),
   );
 
   return (
@@ -855,14 +1234,14 @@ function AlgoTab({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedCountries(availableCountries)}
+              onClick={() => setSelectedLabels(availableLabels)}
               className="rounded-full border border-stone-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-stone-700 transition hover:bg-stone-100"
             >
               Include all
             </button>
             <button
               type="button"
-              onClick={() => setSelectedCountries([])}
+              onClick={() => setSelectedLabels([])}
               className="rounded-full border border-stone-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-stone-700 transition hover:bg-stone-100"
             >
               Clear all
@@ -870,26 +1249,26 @@ function AlgoTab({
           </div>
 
           <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {availableCountries.map((country) => (
+            {availableLabels.map((label) => (
               <label
-                key={country}
+                key={label}
                 className="flex items-center gap-2 rounded-[0.8rem] border border-stone-200 bg-stone-50 px-2.5 py-1.5 text-[11px] text-stone-700"
               >
                 <input
                   type="checkbox"
-                  checked={selectedCountries.includes(country)}
+                  checked={selectedLabels.includes(label)}
                   onChange={() =>
-                    setSelectedCountries((current) =>
-                      current.includes(country)
-                        ? current.filter((item) => item !== country)
-                        : [...current, country].sort((left, right) =>
+                    setSelectedLabels((current) =>
+                      current.includes(label)
+                        ? current.filter((item) => item !== label)
+                        : [...current, label].sort((left, right) =>
                             left.localeCompare(right),
                           ),
                     )
                   }
                   className="h-3 w-3 rounded border-stone-300 text-stone-900"
                 />
-                <span className="truncate">{country}</span>
+                <span className="truncate">{label}</span>
               </label>
             ))}
           </div>
@@ -910,14 +1289,16 @@ function AlgoTab({
   );
 }
 
-function CountryPositionCard({
+function PositionComparisonCard({
   title,
   rows,
   hasAlgo,
+  primaryLabel,
 }: Readonly<{
   title: string;
-  rows: AlgoCountryDisplayRow[];
+  rows: PositionDisplayRow[];
   hasAlgo: boolean;
+  primaryLabel: string;
 }>) {
   const maxAlgoSignal = Math.max(
     0,
@@ -958,7 +1339,7 @@ function CountryPositionCard({
       </div>
       <div className="mt-3 overflow-hidden rounded-[0.85rem] border border-stone-200 bg-white">
         <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,0.78fr))] gap-2 border-b border-stone-200 bg-stone-100 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-stone-500">
-          <span>Country</span>
+          <span>{primaryLabel}</span>
           <span className="text-right">Port</span>
           <span className="text-right">Bmk</span>
           <span className="text-right">Act Bmk</span>
@@ -1003,6 +1384,7 @@ function CountryPositionCard({
 
 function LookthroughTab({
   holdings,
+  allColumns,
   visibleColumns,
   visibleColumnKeys,
   sortKey,
@@ -1017,6 +1399,7 @@ function LookthroughTab({
   isExporting,
 }: Readonly<{
   holdings: CanonicalHolding[];
+  allColumns: LookthroughColumn[];
   visibleColumns: LookthroughColumn[];
   visibleColumnKeys: LookthroughColumnKey[];
   sortKey: LookthroughColumnKey;
@@ -1042,7 +1425,7 @@ function LookthroughTab({
               Hide / show columns
             </summary>
             <div className="absolute left-0 z-20 mt-2 flex max-h-[18rem] w-[17rem] flex-col gap-2 overflow-auto rounded-[0.9rem] border border-stone-200 bg-white p-3 shadow-[0_12px_24px_rgba(28,25,23,0.12)]">
-              {lookthroughColumns.map((column) => (
+              {allColumns.map((column) => (
                 <label
                   key={column.key}
                   className="flex items-center gap-2 text-xs text-stone-700"
@@ -1330,6 +1713,94 @@ function CompactExposureCard({
   );
 }
 
+function IndustryPositionCard({
+  title,
+  rows,
+  sortKey,
+  sortDirection,
+  onSortKeyChange,
+}: Readonly<{
+  title: string;
+  rows: IndustryPositionRow[];
+  sortKey: IndustrySortKey;
+  sortDirection: SortDirection;
+  onSortKeyChange: (nextKey: IndustrySortKey) => void;
+}>) {
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+          {title}
+        </h3>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="font-semibold uppercase tracking-[0.08em] text-stone-500">
+            Sort
+          </span>
+          {([
+            { key: "active", label: "Active Weight" },
+            { key: "sector", label: "Sector" },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => onSortKeyChange(option.key)}
+              className={`rounded-full px-3 py-1.5 font-semibold transition ${
+                sortKey === option.key
+                  ? "bg-stone-950 text-white"
+                  : "border border-stone-300 bg-white text-stone-700 hover:bg-stone-100"
+              }`}
+            >
+              {option.label}
+              {sortKey === option.key ? (
+                <span className="ml-1 text-[10px]">
+                  {sortDirection === "asc" ? "ASC" : "DESC"}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 overflow-hidden rounded-[0.85rem] border border-stone-200 bg-white">
+        <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1.2fr)_repeat(3,minmax(0,0.85fr))] gap-2 border-b border-stone-200 bg-stone-100 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-stone-500">
+          <span>Industry</span>
+          <span>Sector</span>
+          <span className="text-right">Port</span>
+          <span className="text-right">Bmk</span>
+          <span className="text-right">Active</span>
+        </div>
+        <div className="grid">
+          {rows.map((row) => (
+            <div
+              key={row.label}
+              className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1.2fr)_repeat(3,minmax(0,0.85fr))] items-center gap-2 border-b border-stone-200 px-3 py-2 text-[11px] last:border-b-0 odd:bg-white even:bg-stone-50"
+            >
+              <p className="truncate font-semibold text-stone-900" title={row.label}>
+                {row.label}
+              </p>
+              <p className="truncate text-stone-600" title={row.sector}>
+                {row.sector}
+              </p>
+              <span className="text-right text-stone-600">
+                {formatPercent(row.portfolioWeight)}
+              </span>
+              <span className="text-right text-stone-600">
+                {formatPercent(row.benchmarkWeight)}
+              </span>
+              <span
+                className={`text-right font-semibold ${
+                  row.activeVsBenchmark >= 0 ? "text-emerald-700" : "text-rose-700"
+                }`}
+              >
+                {formatPercent(row.activeVsBenchmark)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ComparisonBar({
   label,
   value,
@@ -1402,6 +1873,492 @@ function DistributionComparisonCard({
   );
 }
 
+function ScatterInsightCard({
+  title,
+  subtitle,
+  xLabel,
+  yLabel,
+  points,
+}: Readonly<{
+  title: string;
+  subtitle: string;
+  xLabel: string;
+  yLabel: string;
+  points: ScatterPointRow[];
+}>) {
+  const [hoveredPoint, setHoveredPoint] = useState<{
+    key: string;
+    label: string;
+    x: number;
+    y: number;
+    category?: string;
+    meta?: string;
+    tooltipX: number;
+    tooltipY: number;
+  } | null>(null);
+  const width = 520;
+  const height = 260;
+  const padding = { top: 18, right: 18, bottom: 36, left: 48 };
+  const xValues = points.map((point) => point.x);
+  const yValues = points.map((point) => point.y);
+  const minX = Math.min(-0.01, ...xValues, 0);
+  const maxX = Math.max(0.01, ...xValues, 0);
+  const minY = Math.min(-0.01, ...yValues, 0);
+  const maxY = Math.max(0.01, ...yValues, 0);
+  const maxSize = Math.max(0.01, ...points.map((point) => point.size));
+
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+
+  const scaleX = (value: number) =>
+    padding.left + ((value - minX) / Math.max(maxX - minX, 0.01)) * innerWidth;
+  const scaleY = (value: number) =>
+    padding.top + innerHeight - ((value - minY) / Math.max(maxY - minY, 0.01)) * innerHeight;
+  const zeroX = scaleX(0);
+  const zeroY = scaleY(0);
+  const resolveColor = (category?: string) =>
+    category === "Wide"
+      ? "#0f766e"
+      : category === "Narrow"
+        ? "#2563eb"
+        : category === "None"
+          ? "#d97706"
+          : "#78716c";
+  const pointRecords = points.map((point, pointIndex) => {
+    const key = `${point.label}-${pointIndex}`;
+
+    return {
+      key,
+      point,
+      radius: 4 + (Math.abs(point.size) / maxSize) * 10,
+      color: resolveColor(point.category),
+      scaledX: scaleX(point.x),
+      scaledY: scaleY(point.y),
+    };
+  });
+  const legendItems = [...new Set(points.map((point) => point.category).filter(Boolean))];
+
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        {title}
+      </h3>
+      <p className="mt-1 text-xs text-stone-500">{subtitle}</p>
+      <div className="mt-3 flex flex-wrap items-start justify-end gap-3">
+        {legendItems.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-stone-600">
+            {legendItems.map((category) => (
+              <div key={category} className="flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: resolveColor(category) }}
+                />
+                <span>{category}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="relative mt-3 overflow-x-auto">
+        {hoveredPoint ? (
+          <div
+            className="pointer-events-none absolute z-10 max-w-[18rem] rounded-[0.8rem] border border-stone-200 bg-white/95 px-3 py-2 text-xs text-stone-700 shadow-lg"
+            style={{
+              left: hoveredPoint.tooltipX,
+              top: hoveredPoint.tooltipY,
+              transform: "translate(12px, -110%)",
+            }}
+          >
+            <p className="font-semibold text-stone-900">{hoveredPoint.label}</p>
+            <p>
+              {xLabel}: {formatPercent(hoveredPoint.x)} | {yLabel}:{" "}
+              {formatPercent(hoveredPoint.y)}
+            </p>
+            {hoveredPoint.category ? <p>Moat: {hoveredPoint.category}</p> : null}
+            {hoveredPoint.meta ? <p>{hoveredPoint.meta}</p> : null}
+          </div>
+        ) : null}
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-[15rem] min-w-[32rem] w-full">
+          <rect x="0" y="0" width={width} height={height} fill="transparent" />
+          {[0.25, 0.5, 0.75].map((fraction) => (
+            <line
+              key={`x-grid-${fraction}`}
+              x1={padding.left + innerWidth * fraction}
+              x2={padding.left + innerWidth * fraction}
+              y1={padding.top}
+              y2={padding.top + innerHeight}
+              stroke="#e7e5e4"
+              strokeWidth="1"
+            />
+          ))}
+          {[0.25, 0.5, 0.75].map((fraction) => (
+            <line
+              key={`y-grid-${fraction}`}
+              x1={padding.left}
+              x2={padding.left + innerWidth}
+              y1={padding.top + innerHeight * fraction}
+              y2={padding.top + innerHeight * fraction}
+              stroke="#e7e5e4"
+              strokeWidth="1"
+            />
+          ))}
+          <line
+            x1={zeroX}
+            x2={zeroX}
+            y1={padding.top}
+            y2={padding.top + innerHeight}
+            stroke="#a8a29e"
+            strokeDasharray="4 4"
+          />
+          <line
+            x1={padding.left}
+            x2={padding.left + innerWidth}
+            y1={zeroY}
+            y2={zeroY}
+            stroke="#a8a29e"
+            strokeDasharray="4 4"
+          />
+          {pointRecords.map(({ key, point, radius, color, scaledX, scaledY }) => {
+            const isHovered = hoveredPoint?.key === key;
+            return (
+              <circle
+                key={key}
+                cx={scaledX}
+                cy={scaledY}
+                r={isHovered ? radius + 2 : radius}
+                fill={color}
+                fillOpacity={hoveredPoint == null || isHovered ? 0.82 : 0.32}
+                stroke="#ffffff"
+                strokeWidth={isHovered ? "2.5" : "1.5"}
+                onMouseEnter={(event) => {
+                  const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+                  if (!bounds) {
+                    return;
+                  }
+
+                  setHoveredPoint({
+                    key,
+                    label: point.label,
+                    x: point.x,
+                    y: point.y,
+                    category: point.category,
+                    meta: point.meta,
+                    tooltipX: event.clientX - bounds.left,
+                    tooltipY: event.clientY - bounds.top,
+                  });
+                }}
+                onMouseMove={(event) => {
+                  const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+                  if (!bounds) {
+                    return;
+                  }
+
+                  setHoveredPoint({
+                    key,
+                    label: point.label,
+                    x: point.x,
+                    y: point.y,
+                    category: point.category,
+                    meta: point.meta,
+                    tooltipX: event.clientX - bounds.left,
+                    tooltipY: event.clientY - bounds.top,
+                  });
+                }}
+                onMouseLeave={() => setHoveredPoint((current) => (current?.key === key ? null : current))}
+              >
+                <title>{`${point.label} | ${xLabel}: ${formatPercent(point.x)} | ${yLabel}: ${formatPercent(point.y)}${point.meta ? ` | ${point.meta}` : ""}`}</title>
+              </circle>
+            );
+          })}
+          <text
+            x={padding.left + innerWidth / 2}
+            y={height - 8}
+            textAnchor="middle"
+            className="fill-stone-500 text-[11px]"
+          >
+            {xLabel}
+          </text>
+          <text
+            transform={`translate(14 ${padding.top + innerHeight / 2}) rotate(-90)`}
+            textAnchor="middle"
+            className="fill-stone-500 text-[11px]"
+          >
+            {yLabel}
+          </text>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function ValuationSpreadCard({
+  title,
+  subtitle,
+  rows,
+}: Readonly<{
+  title: string;
+  subtitle: string;
+  rows: SpreadRow[];
+}>) {
+  const displayRows = rows.slice(0, 12);
+  const maxSpread = Math.max(
+    0.01,
+    ...displayRows.map((row) => Math.abs(row.cheapnessSpread ?? 0)),
+  );
+
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        {title}
+      </h3>
+      <p className="mt-1 text-xs text-stone-500">{subtitle}</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {displayRows.map((row, rowIndex) => {
+          const spread = row.cheapnessSpread ?? 0;
+          const width = (Math.abs(spread) / maxSpread) * 45;
+          return (
+            <div key={`${row.label}-${rowIndex}`} className="rounded-[0.85rem] bg-white px-3 py-2 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-stone-900">{row.label}</p>
+                  <p className="text-[11px] text-stone-500">
+                    Port {formatPercent(row.portfolioWeight)} | Bmk {formatPercent(row.benchmarkWeight)} | Active {formatPercent(row.activeWeight)}
+                  </p>
+                </div>
+                <div className="text-right text-[11px]">
+                  <div className="text-stone-500">
+                    P/FV {formatNumber(row.portfolioPfv)} vs {formatNumber(row.benchmarkPfv)}
+                  </div>
+                  <div className={spread >= 0 ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
+                    {spread >= 0 ? "Cheaper " : "Richer "}
+                    {formatNumber(Math.abs(spread), 2)}x
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 relative h-3 rounded-full bg-stone-200">
+                <div className="absolute inset-y-0 left-1/2 w-px bg-stone-400" />
+                <div
+                  className={`absolute inset-y-0 rounded-full ${spread >= 0 ? "bg-emerald-500" : "bg-rose-500"}`}
+                  style={
+                    spread >= 0
+                      ? { left: "50%", width: `${width}%` }
+                      : { right: "50%", width: `${width}%` }
+                  }
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function QualityMatrixCard({
+  cells,
+}: Readonly<{
+  cells: QualityMatrixCell[];
+}>) {
+  const moatOrder = ["Wide", "Narrow", "None", "Unknown"];
+  const pfvOrder = ["< 0.8x", "0.8x - 1.0x", "1.0x - 1.2x", "> 1.2x", "n/a"];
+  const maxAbsolute = Math.max(0.01, ...cells.map((cell) => Math.abs(cell.activeWeight)));
+  const cellMap = new Map(cells.map((cell) => [`${cell.moat}__${cell.pfvBucket}`, cell]));
+
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        Quality Concentration
+      </h3>
+      <p className="mt-1 text-xs text-stone-500">
+        Active weight by moat bucket and P/FV bucket
+      </p>
+      <div className="mt-3 overflow-auto">
+        <table className="min-w-full border-collapse text-[11px]">
+          <thead>
+            <tr>
+              <th className="border border-stone-200 bg-stone-100 px-3 py-2 text-left font-semibold text-stone-500">
+                Moat \ P/FV
+              </th>
+              {pfvOrder.map((bucket) => (
+                <th
+                  key={bucket}
+                  className="border border-stone-200 bg-stone-100 px-3 py-2 text-right font-semibold text-stone-500"
+                >
+                  {bucket}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {moatOrder.map((moat) => (
+              <tr key={moat}>
+                <td className="border border-stone-200 bg-white px-3 py-2 font-semibold text-stone-900">
+                  {moat}
+                </td>
+                {pfvOrder.map((bucket) => {
+                  const cell = cellMap.get(`${moat}__${bucket}`);
+                  const value = cell?.activeWeight ?? 0;
+                  const intensity = Math.min(Math.abs(value) / maxAbsolute, 1);
+                  const backgroundColor =
+                    value > 0
+                      ? `rgba(16, 185, 129, ${0.12 + intensity * 0.4})`
+                      : value < 0
+                        ? `rgba(244, 63, 94, ${0.12 + intensity * 0.4})`
+                        : "rgba(245, 245, 244, 1)";
+                  return (
+                    <td
+                      key={`${moat}-${bucket}`}
+                      className="border border-stone-200 px-3 py-2 text-right font-semibold text-stone-800"
+                      style={{ backgroundColor }}
+                    >
+                      {formatPercent(value)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ActiveRiskTreemapCard({
+  rows,
+}: Readonly<{
+  rows: OpportunityBoardRow[];
+}>) {
+  const displayRows = rows.slice(0, 16);
+  const total = displayRows.reduce((sum, row) => sum + Math.abs(row.activeWeight), 0) || 1;
+
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        Active Risk Map
+      </h3>
+      <p className="mt-1 text-xs text-stone-500">
+        Largest active bets sized by absolute active weight
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {displayRows.map((row, rowIndex) => {
+          const width = Math.max(12, (Math.abs(row.activeWeight) / total) * 100);
+          const colorClassName =
+            (row.upside ?? 0) >= 0.15
+              ? "bg-emerald-100 text-emerald-900"
+              : (row.upside ?? 0) >= 0
+                ? "bg-sky-100 text-sky-900"
+                : "bg-rose-100 text-rose-900";
+          return (
+            <div
+              key={`${row.label}-${rowIndex}`}
+              className={`min-h-[5.5rem] rounded-[0.9rem] border border-stone-200 px-3 py-2 ${colorClassName}`}
+              style={{ flex: `${Math.max(0.8, width / 20)} 1 ${Math.max(12, width)}%` }}
+              title={`${row.label} | Active ${formatPercent(row.activeWeight)} | Upside ${formatUpside(row.upside)}`}
+            >
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] opacity-70">
+                {row.sector}
+              </div>
+              <div className="mt-1 text-sm font-semibold">{row.label}</div>
+              <div className="mt-2 text-[11px]">
+                Active {formatPercent(row.activeWeight)}
+              </div>
+              <div className="text-[11px]">Upside {formatUpside(row.upside)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OverlapBreakdownCard({
+  rows,
+}: Readonly<{
+  rows: OverlapBreakdownRow[];
+}>) {
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        Benchmark Overlap
+      </h3>
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        {rows.map((row, rowIndex) => (
+          <div key={`${row.label}-${rowIndex}`} className="rounded-[0.85rem] bg-white px-3 py-3 shadow-sm">
+            <div className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${row.colorClassName}`}>
+              {row.label}
+            </div>
+            <div className="mt-3 text-2xl font-semibold text-stone-900">{row.count}</div>
+            <div className="mt-1 text-[11px] text-stone-500">
+              Port {formatPercent(row.portfolioWeight)}
+            </div>
+            <div className="text-[11px] text-stone-500">
+              Bmk {formatPercent(row.benchmarkWeight)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OpportunityBoardCard({
+  title,
+  subtitle,
+  rows,
+  weightLabel,
+}: Readonly<{
+  title: string;
+  subtitle: string;
+  rows: OpportunityBoardRow[];
+  weightLabel: "Port" | "Bmk";
+}>) {
+  return (
+    <div className="rounded-[0.95rem] border border-stone-200 bg-stone-50/70 p-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-stone-500">
+        {title}
+      </h3>
+      <p className="mt-1 text-xs text-stone-500">{subtitle}</p>
+      <div className="mt-3 overflow-auto rounded-[0.85rem] border border-stone-200 bg-white">
+        <table className="min-w-full border-collapse text-[11px]">
+          <thead className="bg-stone-100 text-stone-500">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold">Name</th>
+              <th className="px-3 py-2 text-left font-semibold">Sector</th>
+              <th className="px-3 py-2 text-right font-semibold">{weightLabel}</th>
+              <th className="px-3 py-2 text-right font-semibold">P/FV</th>
+              <th className="px-3 py-2 text-right font-semibold">Upside</th>
+              <th className="px-3 py-2 text-right font-semibold">PE</th>
+              <th className="px-3 py-2 text-left font-semibold">Moat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 12).map((row, rowIndex) => (
+              <tr key={`${row.label}-${rowIndex}`} className="border-t border-stone-200">
+                <td className="px-3 py-2 font-semibold text-stone-900">{row.label}</td>
+                <td className="px-3 py-2 text-stone-600">{row.sector}</td>
+                <td className="px-3 py-2 text-right text-stone-600">
+                  {formatPercent(weightLabel === "Port" ? row.portfolioWeight : row.benchmarkWeight)}
+                </td>
+                <td className="px-3 py-2 text-right text-stone-600">
+                  {formatNumber(row.priceToFairValue)}
+                </td>
+                <td className={`px-3 py-2 text-right font-semibold ${(row.upside ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                  {formatUpside(row.upside)}
+                </td>
+                <td className="px-3 py-2 text-right text-stone-600">
+                  {formatNumber(row.forwardPE)}
+                </td>
+                <td className="px-3 py-2 text-stone-600">{row.moat ?? "Unknown"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const algoChartPalette = [
   "#2563eb",
   "#dc2626",
@@ -1418,14 +2375,14 @@ const algoChartPalette = [
 function AlgoLineChart({
   rows,
 }: Readonly<{
-  rows: AlgoCountrySeries[];
+  rows: AlgoSeriesRow[];
 }>) {
   const [hoveredPoint, setHoveredPoint] = useState<AlgoHoverPoint>();
 
   if (rows.length === 0) {
     return (
       <div className="rounded-[0.95rem] border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-sm text-stone-600">
-        Select at least one country to see the algo time series.
+        Select at least one item to see the algo time series.
       </div>
     );
   }
@@ -1491,7 +2448,7 @@ function AlgoLineChart({
 
             {rows.map((row, rowIndex) => {
               const color = algoChartPalette[rowIndex % algoChartPalette.length];
-              const isHoveredCountry = hoveredPoint?.country === row.country;
+              const isHoveredCountry = hoveredPoint?.label === row.label;
               const segments = row.points
                 .map((point, pointIndex) =>
                   point.value == null
@@ -1502,7 +2459,7 @@ function AlgoLineChart({
                 .join(" ");
 
               return (
-                <g key={`${row.identifier}-${row.countryCode}-${rowIndex}`}>
+                <g key={`${row.identifier}-${row.labelKey}-${rowIndex}`}>
                   <path
                     d={segments}
                     fill="none"
@@ -1520,11 +2477,11 @@ function AlgoLineChart({
                     const pointX = xForIndex(pointIndex);
                     const pointY = yForValue(point.value);
                     const isHovered =
-                      hoveredPoint?.country === row.country &&
+                      hoveredPoint?.label === row.label &&
                       hoveredPoint?.dateLabel === point.dateLabel;
 
                     return (
-                      <g key={`${row.identifier}-${row.countryCode}-${point.dateKey}-${pointIndex}`}>
+                      <g key={`${row.identifier}-${row.labelKey}-${point.dateKey}-${pointIndex}`}>
                         <circle
                           cx={pointX}
                           cy={pointY}
@@ -1541,7 +2498,7 @@ function AlgoLineChart({
                           fill="transparent"
                           onMouseEnter={() =>
                             setHoveredPoint({
-                              country: row.country,
+                              label: row.label,
                               dateLabel: point.dateLabel,
                               value: point.value ?? 0,
                               color,
@@ -1551,7 +2508,7 @@ function AlgoLineChart({
                           }
                           onMouseMove={() =>
                             setHoveredPoint({
-                              country: row.country,
+                              label: row.label,
                               dateLabel: point.dateLabel,
                               value: point.value ?? 0,
                               color,
@@ -1560,7 +2517,7 @@ function AlgoLineChart({
                             })
                           }
                         >
-                          <title>{`${row.country} | ${point.dateLabel} | ${formatAlgoNumber(point.value)}`}</title>
+                          <title>{`${row.label} | ${point.dateLabel} | ${formatAlgoNumber(point.value)}`}</title>
                         </circle>
                       </g>
                     );
@@ -1583,7 +2540,7 @@ function AlgoLineChart({
                   className="h-2.5 w-2.5 rounded-full"
                   style={{ backgroundColor: hoveredPoint.color }}
                 />
-                <span className="font-semibold text-stone-900">{hoveredPoint.country}</span>
+                <span className="font-semibold text-stone-900">{hoveredPoint.label}</span>
               </div>
               <div className="mt-1 text-stone-500">{hoveredPoint.dateLabel}</div>
               <div className="mt-0.5 font-semibold text-stone-900">
@@ -1597,7 +2554,7 @@ function AlgoLineChart({
       <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         {rows.map((row, rowIndex) => (
           <div
-            key={`${row.identifier}-${row.countryCode}-${rowIndex}-legend`}
+            key={`${row.identifier}-${row.labelKey}-${rowIndex}-legend`}
             className="flex items-center justify-between rounded-[0.8rem] border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] text-stone-700"
           >
             <div className="flex items-center gap-2">
@@ -1605,7 +2562,7 @@ function AlgoLineChart({
                 className="h-2 w-2 rounded-full"
                 style={{ backgroundColor: algoChartPalette[rowIndex % algoChartPalette.length] }}
               />
-              <span className="truncate font-semibold">{row.country}</span>
+              <span className="truncate font-semibold">{row.label}</span>
             </div>
             <span className="text-stone-500">{formatAlgoNumber(row.latestValue)}</span>
           </div>
@@ -1620,12 +2577,12 @@ function AlgoRawDataTable({
   rows,
 }: Readonly<{
   dateLabels: string[];
-  rows: AlgoCountrySeries[];
+  rows: AlgoSeriesRow[];
 }>) {
   if (rows.length === 0) {
     return (
       <div className="rounded-[0.95rem] border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-sm text-stone-600">
-        Select at least one country to see the raw algo data.
+        Select at least one item to see the raw algo data.
       </div>
     );
   }
@@ -1636,7 +2593,7 @@ function AlgoRawDataTable({
         <thead className="sticky top-0 z-10 bg-stone-950 text-white">
           <tr>
             <th className="border-b border-r border-stone-800 px-2 py-1.5 text-left font-semibold uppercase tracking-[0.06em]">
-              Country
+              Label
             </th>
             <th className="border-b border-r border-stone-800 px-2 py-1.5 text-left font-semibold uppercase tracking-[0.06em]">
               Identifier
@@ -1654,11 +2611,11 @@ function AlgoRawDataTable({
         <tbody>
           {rows.map((row, rowIndex) => (
             <tr
-              key={`${row.identifier}-${row.countryCode}-${rowIndex}`}
+              key={`${row.identifier}-${row.labelKey}-${rowIndex}`}
               className={rowIndex % 2 === 0 ? "bg-white" : "bg-stone-50"}
             >
               <td className="border-b border-r border-stone-200 px-2 py-1.5 font-semibold text-stone-900">
-                {row.country}
+                {row.label}
               </td>
               <td className="border-b border-r border-stone-200 px-2 py-1.5 text-stone-600">
                 {row.identifier}
@@ -1841,44 +2798,40 @@ function buildCategoryComparisonRows(
     .slice(0, 6);
 }
 
-function buildQualityDistributionRows(
-  holdings: CanonicalHolding[],
-): ComparisonDistributionRow[] {
-  return buildCategoryComparisonRows(holdings, (holding) => {
-    const roe = holding.roe;
-    if (roe == null || Number.isNaN(roe)) {
-      return "Unknown";
-    }
-
-    if (roe >= 20) {
-      return "ROE 20%+";
-    }
-    if (roe >= 15) {
-      return "ROE 15-20%";
-    }
-    if (roe >= 10) {
-      return "ROE 10-15%";
-    }
-    if (roe >= 0) {
-      return "ROE 0-10%";
-    }
-
-    return "ROE < 0%";
-  });
-}
-
-function buildCountryRowsWithAlgo(
+function buildRowsWithAlgo(
   rows: ExposureRow[],
-  algoRows: AlgoCountrySeries[],
-): AlgoCountryDisplayRow[] {
+  algoRows: AlgoSeriesRow[],
+): PositionDisplayRow[] {
+  const normalizeLabel = (value: string) => {
+    const normalized = value
+      .toLowerCase()
+      .replace(/&/g, "and")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\binfo\b/g, "information")
+      .replace(/\btech\b/g, "technology")
+      .trim();
+
+    const aliases: Record<string, string> = {
+      "information technology": "technology",
+      financials: "financial services",
+      "consumer discretionary": "consumer cyclical",
+      "consumer staples": "consumer defensive",
+      telecom: "communication services",
+      "telecommunication services": "communication services",
+      materials: "basic materials",
+    };
+
+    return aliases[normalized] ?? normalized;
+  };
+
   const latestSignals = new Map(
     algoRows
       .filter((row) => row.latestValue != null)
-      .map((row) => [row.country, row.latestValue] as const),
+      .map((row) => [normalizeLabel(row.label), row.latestValue] as const),
   );
 
   return rows.map((row) => {
-    const algoWeight = latestSignals.get(row.label);
+    const algoWeight = latestSignals.get(normalizeLabel(row.label));
 
     return {
       ...row,
@@ -1887,6 +2840,364 @@ function buildCountryRowsWithAlgo(
         algoWeight == null ? undefined : row.portfolioWeight - algoWeight,
     };
   });
+}
+
+function buildIndustryPositionRows(holdings: CanonicalHolding[]): IndustryPositionRow[] {
+  const grouped = new Map<
+    string,
+    {
+      row: IndustryPositionRow;
+      sectorWeights: Map<string, number>;
+    }
+  >();
+
+  for (const holding of holdings) {
+    const label = holding.industry ?? "Unclassified";
+    const existing = grouped.get(label) ?? {
+      row: {
+        label,
+        sector: "Unclassified",
+        portfolioWeight: 0,
+        benchmarkWeight: 0,
+        activeVsBenchmark: 0,
+      },
+      sectorWeights: new Map<string, number>(),
+    };
+
+    existing.row.portfolioWeight += holding.targetWeight ?? 0;
+    existing.row.benchmarkWeight += holding.benchmarkWeight ?? 0;
+    existing.row.activeVsBenchmark =
+      existing.row.portfolioWeight - existing.row.benchmarkWeight;
+
+    const sectorLabel = holding.sector ?? "Unclassified";
+    sectorWeightsUpdate(existing.sectorWeights, sectorLabel, holding);
+    grouped.set(label, existing);
+  }
+
+  return [...grouped.values()].map(({ row, sectorWeights }) => {
+    const dominantSector =
+      [...sectorWeights.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ??
+      "Unclassified";
+
+    return {
+      ...row,
+      sector: dominantSector,
+    };
+  });
+}
+
+function sectorWeightsUpdate(
+  sectorWeights: Map<string, number>,
+  sectorLabel: string,
+  holding: CanonicalHolding,
+) {
+  sectorWeights.set(
+    sectorLabel,
+    (sectorWeights.get(sectorLabel) ?? 0) +
+      (holding.targetWeight ?? 0) +
+      (holding.benchmarkWeight ?? 0),
+  );
+}
+
+function buildConvictionValuationRows(holdings: CanonicalHolding[]): ScatterPointRow[] {
+  return holdings
+    .filter(
+      (holding) =>
+        (holding.targetWeight ?? 0) > 0 &&
+        holding.upsideToFairValue != null &&
+        holding.activeWeightVsBenchmark != null,
+    )
+    .sort((left, right) => (right.targetWeight ?? 0) - (left.targetWeight ?? 0))
+    .slice(0, 30)
+    .map((holding) => ({
+      label: holding.securityName,
+      x: holding.activeWeightVsBenchmark ?? 0,
+      y: holding.upsideToFairValue ?? 0,
+      size: holding.targetWeight ?? 0,
+      category: holding.moat,
+      meta: `Weight ${formatPercent(holding.targetWeight)} | P/FV ${formatNumber(
+        holding.priceToFairValue,
+      )}`,
+    }));
+}
+
+function buildReturnVsActiveRows(
+  holdings: CanonicalHolding[],
+  period: "1M" | "MTD" | "YTD" | "1Y",
+): ScatterPointRow[] {
+  const returnAccessor = (holding: CanonicalHolding) => {
+    if (period === "1M") {
+      return holding.apiReturn1M;
+    }
+    if (period === "MTD") {
+      return holding.apiReturnMtd;
+    }
+    if (period === "YTD") {
+      return holding.apiReturnYtd;
+    }
+    return holding.apiReturn1Y;
+  };
+
+  return holdings
+    .filter(
+      (holding) =>
+        holding.activeWeightVsBenchmark != null &&
+        returnAccessor(holding) != null &&
+        Math.abs(holding.activeWeightVsBenchmark ?? 0) > 0.05,
+    )
+    .sort(
+      (left, right) =>
+        Math.abs(right.activeWeightVsBenchmark ?? 0) -
+        Math.abs(left.activeWeightVsBenchmark ?? 0),
+    )
+    .slice(0, 30)
+    .map((holding) => ({
+      label: holding.securityName,
+      x: holding.activeWeightVsBenchmark ?? 0,
+      y: returnAccessor(holding) ?? 0,
+      size: Math.abs(holding.targetWeight ?? holding.benchmarkWeight ?? 0),
+      category: holding.moat,
+      meta: `1Y ${formatPercent(holding.apiReturn1Y)} | Bmk ${formatPercent(
+        holding.benchmarkWeight,
+      )}`,
+    }));
+}
+
+function buildValuationSpreadRows(
+  holdings: CanonicalHolding[],
+  accessor: (holding: CanonicalHolding) => string | undefined,
+): SpreadRow[] {
+  const grouped = new Map<
+    string,
+    {
+      portfolioWeight: number;
+      benchmarkWeight: number;
+      portfolioPfvWeightedSum: number;
+      portfolioPfvWeight: number;
+      benchmarkPfvWeightedSum: number;
+      benchmarkPfvWeight: number;
+    }
+  >();
+
+  for (const holding of holdings) {
+    const label = accessor(holding) ?? "Unclassified";
+    const existing = grouped.get(label) ?? {
+      portfolioWeight: 0,
+      benchmarkWeight: 0,
+      portfolioPfvWeightedSum: 0,
+      portfolioPfvWeight: 0,
+      benchmarkPfvWeightedSum: 0,
+      benchmarkPfvWeight: 0,
+    };
+
+    existing.portfolioWeight += holding.targetWeight ?? 0;
+    existing.benchmarkWeight += holding.benchmarkWeight ?? 0;
+
+    if (holding.priceToFairValue != null) {
+      if ((holding.targetWeight ?? 0) > 0) {
+        existing.portfolioPfvWeightedSum +=
+          holding.priceToFairValue * (holding.targetWeight ?? 0);
+        existing.portfolioPfvWeight += holding.targetWeight ?? 0;
+      }
+
+      if ((holding.benchmarkWeight ?? 0) > 0) {
+        existing.benchmarkPfvWeightedSum +=
+          holding.priceToFairValue * (holding.benchmarkWeight ?? 0);
+        existing.benchmarkPfvWeight += holding.benchmarkWeight ?? 0;
+      }
+    }
+
+    grouped.set(label, existing);
+  }
+
+  return [...grouped.entries()]
+    .map(([label, value]) => {
+      const portfolioPfv =
+        value.portfolioPfvWeight > 0
+          ? value.portfolioPfvWeightedSum / value.portfolioPfvWeight
+          : undefined;
+      const benchmarkPfv =
+        value.benchmarkPfvWeight > 0
+          ? value.benchmarkPfvWeightedSum / value.benchmarkPfvWeight
+          : undefined;
+      return {
+        label,
+        portfolioWeight: value.portfolioWeight,
+        benchmarkWeight: value.benchmarkWeight,
+        activeWeight: value.portfolioWeight - value.benchmarkWeight,
+        portfolioPfv,
+        benchmarkPfv,
+        cheapnessSpread:
+          portfolioPfv != null && benchmarkPfv != null
+            ? benchmarkPfv - portfolioPfv
+            : undefined,
+      };
+    })
+    .filter((row) => row.portfolioWeight > 0 || row.benchmarkWeight > 0)
+    .sort((left, right) => Math.abs(right.activeWeight) - Math.abs(left.activeWeight));
+}
+
+function buildBenchmarkOpportunityRows(
+  holdings: CanonicalHolding[],
+): OpportunityBoardRow[] {
+  return holdings
+    .filter(
+      (holding) =>
+        (holding.targetWeight ?? 0) <= 0.0001 && (holding.benchmarkWeight ?? 0) > 0.05,
+    )
+    .map((holding) => ({
+      label: holding.securityName,
+      sector: holding.sector ?? "Unclassified",
+      country: holding.country ?? "Unknown",
+      portfolioWeight: holding.targetWeight ?? 0,
+      benchmarkWeight: holding.benchmarkWeight ?? 0,
+      activeWeight: (holding.targetWeight ?? 0) - (holding.benchmarkWeight ?? 0),
+      priceToFairValue: holding.priceToFairValue,
+      upside: holding.upsideToFairValue,
+      moat: holding.moat,
+      forwardPE: holding.forwardPE,
+      roe: holding.roe,
+    }))
+    .sort((left, right) => {
+      const leftScore = (left.benchmarkWeight ?? 0) * Math.max(left.upside ?? 0, 0);
+      const rightScore = (right.benchmarkWeight ?? 0) * Math.max(right.upside ?? 0, 0);
+      return rightScore - leftScore || right.benchmarkWeight - left.benchmarkWeight;
+    });
+}
+
+function buildOffBenchmarkIdeaRows(
+  holdings: CanonicalHolding[],
+): OpportunityBoardRow[] {
+  return holdings
+    .filter(
+      (holding) =>
+        (holding.targetWeight ?? 0) > 0.0001 && (holding.benchmarkWeight ?? 0) <= 0.0001,
+    )
+    .map((holding) => ({
+      label: holding.securityName,
+      sector: holding.sector ?? "Unclassified",
+      country: holding.country ?? "Unknown",
+      portfolioWeight: holding.targetWeight ?? 0,
+      benchmarkWeight: holding.benchmarkWeight ?? 0,
+      activeWeight: (holding.targetWeight ?? 0) - (holding.benchmarkWeight ?? 0),
+      priceToFairValue: holding.priceToFairValue,
+      upside: holding.upsideToFairValue,
+      moat: holding.moat,
+      forwardPE: holding.forwardPE,
+      roe: holding.roe,
+    }))
+    .sort((left, right) => (right.portfolioWeight ?? 0) - (left.portfolioWeight ?? 0));
+}
+
+function buildOverlapBreakdownRows(
+  holdings: CanonicalHolding[],
+): OverlapBreakdownRow[] {
+  const categories: OverlapBreakdownRow[] = [
+    {
+      label: "Owned + Benchmark",
+      portfolioWeight: 0,
+      benchmarkWeight: 0,
+      count: 0,
+      colorClassName: "bg-emerald-100 text-emerald-800",
+    },
+    {
+      label: "Owned Only",
+      portfolioWeight: 0,
+      benchmarkWeight: 0,
+      count: 0,
+      colorClassName: "bg-amber-100 text-amber-800",
+    },
+    {
+      label: "Benchmark Only",
+      portfolioWeight: 0,
+      benchmarkWeight: 0,
+      count: 0,
+      colorClassName: "bg-slate-100 text-slate-800",
+    },
+  ];
+
+  for (const holding of holdings) {
+    const hasPortfolio = (holding.targetWeight ?? 0) > 0.0001;
+    const hasBenchmark = (holding.benchmarkWeight ?? 0) > 0.0001;
+
+    const category =
+      hasPortfolio && hasBenchmark ? categories[0] : hasPortfolio ? categories[1] : categories[2];
+    category.portfolioWeight += holding.targetWeight ?? 0;
+    category.benchmarkWeight += holding.benchmarkWeight ?? 0;
+    category.count += 1;
+  }
+
+  return categories;
+}
+
+function buildQualityMatrixCells(
+  holdings: CanonicalHolding[],
+): QualityMatrixCell[] {
+  const pfvBucketOrder = ["< 0.8x", "0.8x - 1.0x", "1.0x - 1.2x", "> 1.2x", "n/a"];
+  const moatOrder = ["Wide", "Narrow", "None", "Unknown"];
+  const cellMap = new Map<string, QualityMatrixCell>();
+
+  for (const moat of moatOrder) {
+    for (const pfvBucket of pfvBucketOrder) {
+      cellMap.set(`${moat}__${pfvBucket}`, {
+        moat,
+        pfvBucket,
+        activeWeight: 0,
+      });
+    }
+  }
+
+  for (const holding of holdings) {
+    const moat = holding.moat ?? "Unknown";
+    const pfvBucket = getPfvBucketLabel(holding.priceToFairValue);
+    const key = `${moat}__${pfvBucket}`;
+    const cell = cellMap.get(key);
+    if (!cell) {
+      continue;
+    }
+
+    cell.activeWeight +=
+      (holding.targetWeight ?? 0) - (holding.benchmarkWeight ?? 0);
+  }
+
+  return [...cellMap.values()];
+}
+
+function buildActiveRiskRows(
+  holdings: CanonicalHolding[],
+): OpportunityBoardRow[] {
+  return holdings
+    .filter((holding) => Math.abs(holding.activeWeightVsBenchmark ?? 0) > 0.05)
+    .map((holding) => ({
+      label: holding.securityName,
+      sector: holding.sector ?? "Unclassified",
+      country: holding.country ?? "Unknown",
+      portfolioWeight: holding.targetWeight ?? 0,
+      benchmarkWeight: holding.benchmarkWeight ?? 0,
+      activeWeight: holding.activeWeightVsBenchmark ?? 0,
+      priceToFairValue: holding.priceToFairValue,
+      upside: holding.upsideToFairValue,
+      moat: holding.moat,
+      forwardPE: holding.forwardPE,
+      roe: holding.roe,
+    }))
+    .sort((left, right) => Math.abs(right.activeWeight) - Math.abs(left.activeWeight));
+}
+
+function getPfvBucketLabel(priceToFairValue?: number) {
+  if (priceToFairValue == null || Number.isNaN(priceToFairValue)) {
+    return "n/a";
+  }
+  if (priceToFairValue < 0.8) {
+    return "< 0.8x";
+  }
+  if (priceToFairValue < 1.0) {
+    return "0.8x - 1.0x";
+  }
+  if (priceToFairValue < 1.2) {
+    return "1.0x - 1.2x";
+  }
+  return "> 1.2x";
 }
 
 function buildAttributionRows(
@@ -1949,6 +3260,34 @@ function buildAttributionRows(
     });
 }
 
+function buildAttributionNarrative(
+  rows: AttributionRow[],
+  period: AttributionPeriod,
+) {
+  if (rows.length === 0) {
+    return undefined;
+  }
+
+  const totalActiveAttribution = rows.reduce((sum, row) => sum + row.value, 0);
+  const positiveRows = rows.filter((row) => row.value > 0);
+  const negativeRows = rows.filter((row) => row.value < 0);
+  const topContributor = positiveRows.sort((left, right) => right.value - left.value)[0];
+  const topDetractor = negativeRows.sort((left, right) => left.value - right.value)[0];
+
+  const sentences = [
+    `For ${period}, active attribution versus benchmark is ${formatPercent(totalActiveAttribution, 2)}.`,
+    topContributor
+      ? `The biggest contributor is ${topContributor.label} at ${formatPercent(topContributor.value, 2)}.`
+      : undefined,
+    topDetractor
+      ? `The biggest detractor is ${topDetractor.label} at ${formatPercent(topDetractor.value, 2)}.`
+      : undefined,
+    `${positiveRows.length} names add positive active contribution and ${negativeRows.length} detract.`,
+  ].filter(Boolean);
+
+  return sentences.join(" ");
+}
+
 function buildSummaryUniverseRows(holdings: CanonicalHolding[]) {
   const merged = new Map<string, CanonicalHolding>();
 
@@ -1976,6 +3315,7 @@ function buildSummaryUniverseRows(holdings: CanonicalHolding[]) {
     existing.uncertainty = existing.uncertainty ?? holding.uncertainty;
     existing.country = existing.country ?? holding.country;
     existing.sector = existing.sector ?? holding.sector;
+    existing.industry = existing.industry ?? holding.industry;
     existing.apiReturn1M = existing.apiReturn1M ?? holding.apiReturn1M;
     existing.apiReturnMtd = existing.apiReturnMtd ?? holding.apiReturnMtd;
     existing.apiReturnYtd = existing.apiReturnYtd ?? holding.apiReturnYtd;
@@ -2108,6 +3448,8 @@ function exportColumnWidth(column: LookthroughColumn) {
       return 14;
     case "sector":
       return 18;
+    case "industry":
+      return 22;
     case "targetWeight":
     case "benchmarkWeight":
       return 14;

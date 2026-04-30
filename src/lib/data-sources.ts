@@ -1,7 +1,10 @@
 import type { ParsedWorkbook } from "@/types/workbook";
 
 export type SourceRole =
-  | "pmhub_portfolio"
+  | "pmhub_global_xus"
+  | "pmhub_us_opp"
+  | "pmhub_consumer"
+  | "pmhub_dividend"
   | "algo_signal"
   | "presentation_example"
   | "unknown";
@@ -16,11 +19,18 @@ export interface SourceDescriptor {
 
 export const sourceDescriptors: SourceDescriptor[] = [
   {
-    role: "pmhub_portfolio",
-    label: "PMHub Portfolio",
+    role: "pmhub_global_xus",
+    label: "PMHub Portfolio - Global xUS",
     filenamePatterns: [/^pmhub-report_/i],
     description:
-      "Owned monthly PMHub holdings workbook used as the portfolio input.",
+      "Owned monthly PMHub holdings workbook used as the Global xUS portfolio input.",
+  },
+  {
+    role: "pmhub_us_opp",
+    label: "PMHub Portfolio - US Opp Value",
+    filenamePatterns: [/^usopp_/i],
+    description:
+      "Owned monthly PMHub holdings workbook used as the US Opp Value portfolio input.",
   },
   {
     role: "algo_signal",

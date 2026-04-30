@@ -4,28 +4,29 @@ export interface AlgoTimePoint {
   value?: number;
 }
 
-export interface AlgoCountrySeries {
+export interface AlgoSeriesRow {
   identifier: string;
-  countryCode: string;
-  country: string;
+  labelKey: string;
+  label: string;
   latestValue?: number;
   points: AlgoTimePoint[];
 }
 
-export interface AlgoCountrySnapshot {
+export interface AlgoSignalSnapshot {
   identifier: string;
-  countryCode: string;
-  country: string;
+  labelKey: string;
+  label: string;
   value?: number;
 }
 
 export interface AlgoDashboardData {
   available: boolean;
+  mode: "country" | "sector";
   sourceFileName?: string;
   latestDateKey?: string;
   latestDateLabel?: string;
   trailingDateLabels: string[];
-  rows: AlgoCountrySeries[];
-  latestCountrySignals: AlgoCountrySnapshot[];
+  rows: AlgoSeriesRow[];
+  latestSignals: AlgoSignalSnapshot[];
   notes: string[];
 }

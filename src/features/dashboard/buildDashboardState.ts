@@ -1,5 +1,6 @@
 import {
   buildCountryExposure,
+  buildIndustryExposure,
   buildMoatDistribution,
   buildPfvDistribution,
   buildSectorExposure,
@@ -17,10 +18,10 @@ import {
 } from "@/lib/data-retention";
 import {
   pmhubFieldAliases,
-  pmhubWorkbookContract,
   type PmhubFieldKey,
 } from "@/lib/pmhub-workbook-contract";
 import { formatDateToken, pickLatestWorkbooksByRole } from "@/lib/data-sources";
+import { getSleeveConfig, type SleeveId } from "@/lib/sleeves";
 import type { DashboardState, SourceSnapshot } from "@/types/dashboard";
 import type { CanonicalHolding } from "@/types/holdings";
 import type { MorningstarEnrichmentRecord } from "@/types/morningstar";
@@ -125,13 +126,17 @@ function getFieldNumber(row: ParsedSheetRow, key: PmhubFieldKey) {
   return asNumber(getFieldValue(row, key));
 }
 
-function getWeight(row: ParsedSheetRow, sheet: ParsedSheet): number | undefined {
+function getWeight(
+  row: ParsedSheetRow,
+  sheet: ParsedSheet,
+  weightColumnIndex: number,
+): number | undefined {
   const directWeight = getFieldNumber(row, "weight");
   if (directWeight != null) {
     return directWeight;
   }
 
-  const fallbackHeader = sheet.normalizedHeaders[pmhubWorkbookContract.weightColumnIndex];
+  const fallbackHeader = sheet.normalizedHeaders[weightColumnIndex];
   return fallbackHeader ? asNumber(row[fallbackHeader]) : undefined;
 }
 
@@ -146,18 +151,21 @@ function buildCanonicalId(row: ParsedSheetRow, fallback: string): string {
     .join("__");
 }
 
-function looksLikeHolding(row: ParsedSheetRow, sheet: ParsedSheet) {
+function looksLikeHolding(row: ParsedSheetRow, sheet: ParsedSheet, weightColumnIndex: number) {
   return Boolean(
     getFieldString(row, "securityName") ||
       getFieldString(row, "isin") ||
       getFieldString(row, "ticker") ||
-      getWeight(row, sheet) != null,
+      getWeight(row, sheet, weightColumnIndex) != null,
   );
 }
 
-function mapWorkbookRows(sheet: ParsedSheet): CanonicalHolding[] {
+function mapWorkbookRows(
+  sheet: ParsedSheet,
+  weightColumnIndex: number,
+): CanonicalHolding[] {
   return sheet.rows
-    .filter((row) => looksLikeHolding(row, sheet))
+    .filter((row) => looksLikeHolding(row, sheet, weightColumnIndex))
     .map((row, index) => ({
       canonicalId: buildCanonicalId(row, `pmhub-${index}`),
       securityName: getFieldString(row, "securityName") ?? "Unknown Security",
@@ -170,8 +178,9 @@ function mapWorkbookRows(sheet: ParsedSheet): CanonicalHolding[] {
         resolveCountryName(getFieldString(row, "country")),
       currency: getFieldString(row, "currency"),
       sector: getFieldString(row, "sector"),
+      industry: getFieldString(row, "industry"),
       currencyContribution: getFieldNumber(row, "currencyContribution"),
-      targetWeight: getWeight(row, sheet),
+      targetWeight: getWeight(row, sheet, weightColumnIndex),
       price: getFieldNumber(row, "price"),
       mtdReturn: getFieldNumber(row, "mtdReturn"),
       oneMonthReturn: getFieldNumber(row, "oneMonthReturn"),
@@ -294,6 +303,12 @@ function mapBenchmarkRecordToHolding(
       (record.gicsSector as string | number | null | undefined) ??
       (record["GICS Sector"] as string | number | null | undefined),
   );
+  const industry = asString(
+    (record.industry as string | number | null | undefined) ??
+      (record.Industry as string | number | null | undefined) ??
+      (record.gicsIndustry as string | number | null | undefined) ??
+      (record["GICS Industry"] as string | number | null | undefined),
+  );
 
   return {
     canonicalId: `benchmark::${normalizeIdentifier(secid) ?? normalizeIdentifier(isin) ?? normalizeIdentifier(ticker) ?? normalizeIdentifier(securityName) ?? securityName}`,
@@ -307,6 +322,7 @@ function mapBenchmarkRecordToHolding(
     ),
     country,
     sector,
+    industry,
     targetWeight: 0,
     benchmarkWeight,
     priceToFairValue: asNumber(
@@ -376,6 +392,7 @@ function applyMorningstarEnrichment(
     holding.roe = record.roe ?? holding.roe;
     holding.priceToBook = record.priceToBook ?? holding.priceToBook;
     holding.sector = record.sector ?? holding.sector;
+    holding.industry = record.industry ?? holding.industry;
     holding.country = resolveCountryName(record.country) ?? holding.country;
     holding.secid =
       record.identifier.secid ?? record.matchedBenchmark?.secId ?? holding.secid;
@@ -438,6 +455,7 @@ function buildDetailRows(
       existing.secid = existing.secid ?? benchmarkHolding.secid;
       existing.country = existing.country ?? benchmarkHolding.country;
       existing.sector = existing.sector ?? benchmarkHolding.sector;
+      existing.industry = existing.industry ?? benchmarkHolding.industry;
       existing.priceToFairValue =
         existing.priceToFairValue ?? benchmarkHolding.priceToFairValue;
       existing.forwardPE = existing.forwardPE ?? benchmarkHolding.forwardPE;
@@ -506,18 +524,23 @@ function countWorkbookFallbackRows(holdings: CanonicalHolding[]) {
   ).length;
 }
 
-function selectPortfolioWorkbook(workbooks: ParsedWorkbook[]) {
-  return workbooks.find((workbook) => workbook.sourceRole === "pmhub_portfolio") ?? workbooks[0];
+function selectPortfolioWorkbook(workbooks: ParsedWorkbook[], sleeveId: SleeveId) {
+  const sleeveConfig = getSleeveConfig(sleeveId);
+  return workbooks.find(
+    (workbook) => workbook.sourceRole === sleeveConfig.portfolioSourceRole,
+  );
 }
 
-function selectPortfolioSheet(workbook?: ParsedWorkbook) {
+function selectPortfolioSheet(workbook: ParsedWorkbook | undefined, sleeveId: SleeveId) {
   if (!workbook) {
     return undefined;
   }
 
+  const { pmhubContract } = getSleeveConfig(sleeveId);
+
   return (
     workbook.sheets.find(
-      (sheet) => sheet.name.toLowerCase() === pmhubWorkbookContract.sheetName.toLowerCase(),
+      (sheet) => sheet.name.toLowerCase() === pmhubContract.sheetName.toLowerCase(),
     ) ?? workbook.sheets[0]
   );
 }
@@ -553,10 +576,13 @@ function formatMorningstarAsOfLabel(dateValue?: string) {
 function withAlgoDashboardState(
   dashboardState: DashboardState,
   fallbackAlgo: DashboardState["algo"],
+  sleeveId: SleeveId,
 ): DashboardState {
   return {
     ...dashboardState,
+    sleeveId,
     algo: fallbackAlgo.available ? fallbackAlgo : dashboardState.algo,
+    industryExposure: dashboardState.industryExposure ?? [],
   };
 }
 
@@ -571,14 +597,17 @@ export async function buildDashboardState(
   rawWorkbooks: ParsedWorkbook[],
   options?: {
     preferStubEnrichment?: boolean;
+    sleeveId?: SleeveId;
     retention?: DashboardRetentionOptions;
   },
 ): Promise<DashboardState> {
+  const sleeveId = options?.sleeveId ?? "global_xus";
+  const sleeveConfig = getSleeveConfig(sleeveId);
   const workbooks = pickLatestWorkbooksByRole(rawWorkbooks);
-  const portfolioWorkbook = selectPortfolioWorkbook(workbooks);
-  const portfolioSheet = selectPortfolioSheet(portfolioWorkbook);
+  const portfolioWorkbook = selectPortfolioWorkbook(workbooks, sleeveId);
+  const portfolioSheet = selectPortfolioSheet(portfolioWorkbook, sleeveId);
   const algoWorkbook = selectAlgoWorkbook(workbooks);
-  const algo = parseAlgoWorkbook(workbooks);
+  const algo = parseAlgoWorkbook(workbooks, sleeveId);
   const retentionOptions = options?.retention;
   const workbookHash = retentionOptions?.workbookBuffer
     ? computeWorkbookHash(retentionOptions.workbookBuffer)
@@ -588,11 +617,12 @@ export async function buildDashboardState(
       ? await loadLatestConfiguredSnapshot(workbookHash)
       : undefined;
   const normalizedRetainedDashboardState = retainedSnapshot
-    ? withAlgoDashboardState(retainedSnapshot.dashboardState, algo)
+    ? withAlgoDashboardState(retainedSnapshot.dashboardState, algo, sleeveId)
     : undefined;
 
   if (!portfolioSheet || !portfolioWorkbook) {
     return {
+      sleeveId,
       asOfLabel: undefined,
       morningstarAsOfLabel: undefined,
       sources: [],
@@ -602,6 +632,7 @@ export async function buildDashboardState(
       summary: summarizePortfolio([]),
       sectorExposure: [],
       countryExposure: [],
+      industryExposure: [],
       moatDistribution: [],
       pfvDistribution: [],
       valuationBySector: [],
@@ -628,15 +659,17 @@ export async function buildDashboardState(
       enrichmentAudit: {
         provider: "morningstar-internal-api",
         status: "stubbed",
-        benchmarkInvestmentId: pmhubWorkbookContract.benchmarkInvestmentId,
-        directDataSetIdOrName: pmhubWorkbookContract.directDataSetIdOrName,
+        benchmarkInvestmentId: sleeveConfig.pmhubContract.benchmarkInvestmentId,
+        directDataSetIdOrName: sleeveConfig.pmhubContract.directDataSetIdOrName,
         requestedFieldGroups: [],
         matchedByIsin: 0,
         matchedByTicker: 0,
         unmatchedHoldings: 0,
         workbookFallbackRows: 0,
         benchmarkConstituentCount: 0,
-        notes: ["No PMHub workbook could be parsed."],
+        notes: [
+          `No PMHub workbook is loaded yet for ${sleeveConfig.tabLabel}. Upload one to unlock this sleeve.`,
+        ],
       },
     };
   }
@@ -655,10 +688,14 @@ export async function buildDashboardState(
     );
   }
 
-  const workbookRows = mapWorkbookRows(portfolioSheet);
+  const workbookRows = mapWorkbookRows(
+    portfolioSheet,
+    sleeveConfig.pmhubContract.weightColumnIndex,
+  );
   const weightedHoldings = workbookRows.filter((holding) => (holding.targetWeight ?? 0) > 0);
   const enrichment = await enrichPortfolioHoldings(weightedHoldings, {
     preferStub: options?.preferStubEnrichment,
+    sleeveConfig,
   });
   applyMorningstarEnrichment(weightedHoldings, enrichment.records);
   const finalizedHoldings = finalizeHoldings(weightedHoldings);
@@ -686,6 +723,7 @@ export async function buildDashboardState(
   ];
 
   let dashboardState: DashboardState = {
+    sleeveId,
     asOfLabel: sources[0]?.dateLabel,
     morningstarAsOfLabel:
       enrichment.audit.status === "configured"
@@ -698,6 +736,7 @@ export async function buildDashboardState(
     summary: summarizePortfolio(finalizedHoldings),
     sectorExposure: buildSectorExposure(finalizedHoldings),
     countryExposure: buildCountryExposure(finalizedHoldings),
+    industryExposure: buildIndustryExposure(finalizedHoldings),
     moatDistribution: buildMoatDistribution(finalizedHoldings),
     pfvDistribution: buildPfvDistribution(finalizedHoldings),
     valuationBySector: buildSectorExposure(finalizedHoldings)

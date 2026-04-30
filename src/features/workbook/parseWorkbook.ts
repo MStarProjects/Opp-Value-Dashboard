@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 
 import { detectSourceRole, extractDateToken } from "@/lib/data-sources";
-import { pmhubWorkbookContract } from "@/lib/pmhub-workbook-contract";
+import { getSleeveConfig, sleeveOrder, type SleeveId } from "@/lib/sleeves";
 import { normalizeHeader } from "@/features/workbook/normalizeHeaders";
 import type { ParsedSheet, ParsedWorkbook, ParsedSheetRow } from "@/types/workbook";
 
@@ -124,6 +124,37 @@ function parseSheet(
   };
 }
 
+function resolvePmhubContractFromRole(role: ParsedWorkbook["sourceRole"]) {
+  if (role === "pmhub_global_xus") {
+    return getSleeveConfig("global_xus").pmhubContract;
+  }
+
+  if (role === "pmhub_us_opp") {
+    return getSleeveConfig("us_opp").pmhubContract;
+  }
+
+  if (role === "pmhub_consumer") {
+    return getSleeveConfig("consumer").pmhubContract;
+  }
+
+  if (role === "pmhub_dividend") {
+    return getSleeveConfig("dividend").pmhubContract;
+  }
+
+  return undefined;
+}
+
+function inferPmhubContractFromWorkbook(workbook: XLSX.WorkBook) {
+  return sleeveOrder
+    .map((sleeveId) => getSleeveConfig(sleeveId as SleeveId))
+    .find((config) =>
+      workbook.SheetNames.some(
+        (sheetName) =>
+          sheetName.toLowerCase() === config.pmhubContract.sheetName.toLowerCase(),
+      ),
+    )?.pmhubContract;
+}
+
 export function parseWorkbookData(
   fileName: string,
   data: ArrayBuffer | Uint8Array,
@@ -133,15 +164,15 @@ export function parseWorkbookData(
       ? XLSX.read(data, { type: "buffer" })
       : XLSX.read(data, { type: "array" });
   const inferredAlgoWorkbook = workbook.SheetNames.some(
-    (sheetName) => sheetName.toLowerCase() === "international_opp_value",
+    (sheetName) =>
+      ["international_opp_value", "us_opp_value"].includes(sheetName.toLowerCase()),
   );
   const sourceRole =
     detectSourceRole(fileName) === "unknown" && inferredAlgoWorkbook
       ? "algo_signal"
       : detectSourceRole(fileName);
-  const looksLikePmhubWorkbook =
-    workbook.SheetNames.length === 1 &&
-    workbook.SheetNames[0].toLowerCase() === pmhubWorkbookContract.sheetName.toLowerCase();
+  const pmhubContract =
+    resolvePmhubContractFromRole(sourceRole) ?? inferPmhubContractFromWorkbook(workbook);
 
   return {
     fileName,
@@ -151,11 +182,11 @@ export function parseWorkbookData(
       parseSheet(
         workbook,
         sheetName,
-        (sourceRole === "pmhub_portfolio" || looksLikePmhubWorkbook) &&
-          sheetName.toLowerCase() === pmhubWorkbookContract.sheetName.toLowerCase()
+        pmhubContract &&
+          sheetName.toLowerCase() === pmhubContract.sheetName.toLowerCase()
           ? {
-              headerRowIndex: pmhubWorkbookContract.headerRowIndex,
-              dataStartRowIndex: pmhubWorkbookContract.dataStartRowIndex,
+              headerRowIndex: pmhubContract.headerRowIndex,
+              dataStartRowIndex: pmhubContract.dataStartRowIndex,
             }
           : undefined,
       ),

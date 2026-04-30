@@ -49,6 +49,13 @@ export function buildCountryExposure(
   return buildExposure(holdings, (holding) => holding.country, basis);
 }
 
+export function buildIndustryExposure(
+  holdings: CanonicalHolding[],
+  basis: "targetWeight" | "driftedWeight" = "targetWeight",
+): ExposureRow[] {
+  return buildExposure(holdings, (holding) => holding.industry, basis);
+}
+
 export function buildMoatDistribution(
   holdings: CanonicalHolding[],
   basis: "targetWeight" | "driftedWeight" = "targetWeight",

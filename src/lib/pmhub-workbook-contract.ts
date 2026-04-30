@@ -1,11 +1,11 @@
-export const pmhubWorkbookContract = {
-  sheetName: "Sheet A",
-  headerRowIndex: 0,
-  dataStartRowIndex: 2,
-  weightColumnIndex: 6,
-  benchmarkInvestmentId: "MGXTMENU",
-  directDataSetIdOrName: "Global xUS Opp Value",
-} as const;
+export interface PmhubWorkbookContract {
+  sheetName: string;
+  headerRowIndex: number;
+  dataStartRowIndex: number;
+  weightColumnIndex: number;
+  benchmarkInvestmentId: string;
+  directDataSetIdOrName: string;
+}
 
 export const pmhubFieldAliases = {
   securityName: ["security name"],
@@ -13,7 +13,7 @@ export const pmhubFieldAliases = {
   cusip: ["cusip"],
   sedol: ["sedol"],
   ticker: ["ticker"],
-  country: ["country code"],
+  country: ["country code", "country"],
   currencyContribution: ["currency contrib"],
   currency: ["currency"],
   price: ["last/price"],
@@ -29,6 +29,7 @@ export const pmhubFieldAliases = {
   contributionToReturnYtd: ["contribution to return - ytd"],
   contributionToReturnOneMonth: ["contribution to return - 1 mo"],
   sector: ["sector", "gics sector", "morningstar sector"],
+  industry: ["industry", "gics industry", "morningstar industry"],
   priceToFairValue: ["price to fair value", "p/fv", "mer p/fair value"],
   moat: ["economic moat", "moat"],
   uncertainty: ["fair value uncertainty", "uncertainty"],
@@ -37,3 +38,38 @@ export const pmhubFieldAliases = {
 } as const;
 
 export type PmhubFieldKey = keyof typeof pmhubFieldAliases;
+
+export const pmhubWorkbookContracts = {
+  global_xus: {
+    sheetName: "Sheet A",
+    headerRowIndex: 0,
+    dataStartRowIndex: 2,
+    weightColumnIndex: 6,
+    benchmarkInvestmentId: "MGXTMENU",
+    directDataSetIdOrName: "Global xUS Opp Value",
+  },
+  us_opp: {
+    sheetName: "Sheet A",
+    headerRowIndex: 0,
+    dataStartRowIndex: 2,
+    weightColumnIndex: 4,
+    benchmarkInvestmentId: "F000011IK3",
+    directDataSetIdOrName: "US Opp Value",
+  },
+  consumer: {
+    sheetName: "Sheet A",
+    headerRowIndex: 0,
+    dataStartRowIndex: 2,
+    weightColumnIndex: 4,
+    benchmarkInvestmentId: "",
+    directDataSetIdOrName: "Consumer",
+  },
+  dividend: {
+    sheetName: "Sheet A",
+    headerRowIndex: 0,
+    dataStartRowIndex: 2,
+    weightColumnIndex: 4,
+    benchmarkInvestmentId: "",
+    directDataSetIdOrName: "Dividend",
+  },
+} as const satisfies Record<string, PmhubWorkbookContract>;

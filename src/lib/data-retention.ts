@@ -5,12 +5,14 @@ import path from "node:path";
 import type { DashboardState } from "@/types/dashboard";
 import type { MorningstarEnrichmentResult } from "@/types/morningstar";
 import type { ParsedWorkbook } from "@/types/workbook";
+import type { SleeveId } from "@/lib/sleeves";
 
 const retentionRootPath = path.join(process.cwd(), "data", "retention");
 const retentionManifestPath = path.join(retentionRootPath, "manifest.json");
 
 export interface RetentionManifestEntry {
   snapshotId: string;
+  sleeveId: SleeveId;
   createdAt: string;
   snapshotDate: string;
   snapshotReason: string;
@@ -139,6 +141,7 @@ export async function persistRetentionSnapshot(
 
   const entry: RetentionManifestEntry = {
     snapshotId: directoryName,
+    sleeveId: input.dashboardState.sleeveId,
     createdAt,
     snapshotDate,
     snapshotReason: input.snapshotReason,

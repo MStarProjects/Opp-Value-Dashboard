@@ -1,11 +1,10 @@
 import * as XLSX from "xlsx";
 
-import type { AlgoCountrySeries, AlgoDashboardData, AlgoCountrySnapshot } from "@/types/algo";
+import { getSleeveConfig, type SleeveId } from "@/lib/sleeves";
+import type { AlgoDashboardData, AlgoSeriesRow, AlgoSignalSnapshot } from "@/types/algo";
 import type { ParsedSheet, ParsedWorkbook } from "@/types/workbook";
 
-const targetSheetName = "international_opp_value";
 const trailingMonths = 12;
-const absoluteValueRowCount = 29;
 
 const explicitCountryNames: Record<string, string> = {
   AT: "Austria",
@@ -37,6 +36,20 @@ const explicitCountryNames: Record<string, string> = {
   TW: "Taiwan",
   UK: "United Kingdom",
   ZA: "South Africa",
+};
+
+const usSectorNames: Record<string, string> = {
+  "US IT EQ": "Technology",
+  "US FN EQ": "Financial Services",
+  "US HC EQ": "Healthcare",
+  "US CD EQ": "Consumer Cyclical",
+  "US ID EQ": "Industrials",
+  "US TL EQ": "Communication Services",
+  "US CS EQ": "Consumer Defensive",
+  "US EN EQ": "Energy",
+  "US MT EQ": "Basic Materials",
+  "US REIT": "Real Estate",
+  "US UT EQ": "Utilities",
 };
 
 interface ParsedDateColumn {
@@ -76,12 +89,16 @@ function asPercentWeight(value: string | number | null | undefined) {
   return numericValue * 100;
 }
 
-function buildEmptyAlgoDashboardData(note: string): AlgoDashboardData {
+function buildEmptyAlgoDashboardData(
+  mode: AlgoDashboardData["mode"],
+  note: string,
+): AlgoDashboardData {
   return {
     available: false,
+    mode,
     trailingDateLabels: [],
     rows: [],
-    latestCountrySignals: [],
+    latestSignals: [],
     notes: [note],
   };
 }
@@ -90,17 +107,22 @@ function selectAlgoWorkbook(workbooks: ParsedWorkbook[]) {
   return (
     workbooks.find((workbook) => workbook.sourceRole === "algo_signal") ??
     workbooks.find((workbook) =>
-      workbook.sheets.some((sheet) => sheet.name.toLowerCase() === targetSheetName),
+      workbook.sheets.some((sheet) =>
+        ["international_opp_value", "us_opp_value"].includes(sheet.name.toLowerCase()),
+      ),
     )
   );
 }
 
-function selectAlgoSheet(workbook?: ParsedWorkbook) {
+function selectAlgoSheet(workbook: ParsedWorkbook | undefined, sleeveId: SleeveId) {
   if (!workbook) {
     return undefined;
   }
 
-  return workbook.sheets.find((sheet) => sheet.name.toLowerCase() === targetSheetName);
+  const { algoContract } = getSleeveConfig(sleeveId);
+  return workbook.sheets.find(
+    (sheet) => sheet.name.toLowerCase() === algoContract.sheetName.toLowerCase(),
+  );
 }
 
 function parseHeaderDate(rawHeader: string): ParsedDateColumn | undefined {
@@ -158,23 +180,56 @@ function resolveCountry(identifier: string) {
   const explicit = explicitCountryNames[countryCode];
   if (explicit) {
     return {
-      countryCode,
-      country: explicit,
+      labelKey: countryCode,
+      label: explicit,
     };
   }
 
   try {
     const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
     return {
-      countryCode,
-      country: displayNames.of(countryCode) ?? identifier,
+      labelKey: countryCode,
+      label: displayNames.of(countryCode) ?? identifier,
     };
   } catch {
     return {
-      countryCode,
-      country: identifier,
+      labelKey: countryCode,
+      label: identifier,
     };
   }
+}
+
+function resolveUsSector(identifier: string) {
+  const normalized = identifier.trim().toUpperCase();
+  const label = usSectorNames[normalized];
+  if (!label) {
+    return undefined;
+  }
+
+  return {
+    labelKey: normalized,
+    label,
+  };
+}
+
+function shouldStopAtRowBoundary(
+  identifier: string | undefined,
+  resolvedLabel: { labelKey: string; label: string } | undefined,
+  parsedRowCount: number,
+) {
+  if (parsedRowCount === 0) {
+    return false;
+  }
+
+  if (!identifier) {
+    return true;
+  }
+
+  if (!resolvedLabel) {
+    return true;
+  }
+
+  return false;
 }
 
 function buildDateColumns(sheet: ParsedSheet) {
@@ -194,27 +249,43 @@ function buildDateColumns(sheet: ParsedSheet) {
     .filter((column): column is ParsedDateColumn => Boolean(column));
 }
 
-function buildLatestCountrySignals(rows: AlgoCountrySeries[]): AlgoCountrySnapshot[] {
+function buildLatestSignals(rows: AlgoSeriesRow[]): AlgoSignalSnapshot[] {
   return rows
-    .map<AlgoCountrySnapshot>((row) => ({
+    .map<AlgoSignalSnapshot>((row) => ({
       identifier: row.identifier,
-      countryCode: row.countryCode,
-      country: row.country,
+      labelKey: row.labelKey,
+      label: row.label,
       value: row.latestValue,
     }))
-    .sort((left, right) => left.country.localeCompare(right.country));
+    .sort((left, right) => left.label.localeCompare(right.label));
 }
 
-export function parseAlgoWorkbook(workbooks: ParsedWorkbook[]): AlgoDashboardData {
-  const workbook = selectAlgoWorkbook(workbooks);
-  if (!workbook) {
-    return buildEmptyAlgoDashboardData("No algo workbook is loaded yet.");
+function resolveAlgoLabel(
+  sleeveId: SleeveId,
+  identifier: string,
+): { labelKey: string; label: string } | undefined {
+  if (getSleeveConfig(sleeveId).algoContract.mode === "country") {
+    return resolveCountry(identifier);
   }
 
-  const sheet = selectAlgoSheet(workbook);
+  return resolveUsSector(identifier);
+}
+
+export function parseAlgoWorkbook(
+  workbooks: ParsedWorkbook[],
+  sleeveId: SleeveId,
+): AlgoDashboardData {
+  const { algoContract } = getSleeveConfig(sleeveId);
+  const workbook = selectAlgoWorkbook(workbooks);
+  if (!workbook) {
+    return buildEmptyAlgoDashboardData(algoContract.mode, "No algo workbook is loaded yet.");
+  }
+
+  const sheet = selectAlgoSheet(workbook, sleeveId);
   if (!sheet) {
     return buildEmptyAlgoDashboardData(
-      "The algo workbook did not include the International_Opp_Value tab.",
+      algoContract.mode,
+      `The algo workbook did not include the ${algoContract.sheetName} tab.`,
     );
   }
 
@@ -223,39 +294,42 @@ export function parseAlgoWorkbook(workbooks: ParsedWorkbook[]): AlgoDashboardDat
   const latestDateColumn = dateColumns[0];
   const latestTwelveColumns = dateColumns.slice(0, trailingMonths).reverse();
 
-  if (!identifierKey || latestTwelveColumns.length === 0) {
+  if (!identifierKey || !latestDateColumn || latestTwelveColumns.length === 0) {
     return buildEmptyAlgoDashboardData(
-      "The International_Opp_Value tab did not contain the expected date columns.",
+      algoContract.mode,
+      `The ${algoContract.sheetName} tab did not contain the expected date columns.`,
     );
   }
 
-  const seriesRows: AlgoCountrySeries[] = [];
-  const seenCountryCodes = new Set<string>();
+  const seriesRows: AlgoSeriesRow[] = [];
+  const seenLabelKeys = new Set<string>();
+  const candidateRows = sheet.rows.slice(
+    algoContract.rowStartIndex,
+    algoContract.rowEndIndex + 1,
+  );
 
-  for (const row of sheet.rows.slice(0, absoluteValueRowCount)) {
+  for (const row of candidateRows) {
     const identifier = asString(row[identifierKey]);
-    if (!identifier) {
+    const resolvedLabel = identifier ? resolveAlgoLabel(sleeveId, identifier) : undefined;
+    if (shouldStopAtRowBoundary(identifier, resolvedLabel, seriesRows.length)) {
+      break;
+    }
+
+    if (!identifier || !resolvedLabel) {
       continue;
     }
 
-    const resolvedCountry = resolveCountry(identifier);
-    if (!resolvedCountry) {
+    if (seenLabelKeys.has(resolvedLabel.labelKey)) {
       continue;
     }
 
-    if (seenCountryCodes.has(resolvedCountry.countryCode)) {
-      continue;
-    }
-
-    seenCountryCodes.add(resolvedCountry.countryCode);
+    seenLabelKeys.add(resolvedLabel.labelKey);
 
     seriesRows.push({
       identifier,
-      countryCode: resolvedCountry.countryCode,
-      country: resolvedCountry.country,
-      latestValue: latestDateColumn
-        ? asPercentWeight(row[latestDateColumn.key])
-        : undefined,
+      labelKey: resolvedLabel.labelKey,
+      label: resolvedLabel.label,
+      latestValue: asPercentWeight(row[latestDateColumn.key]),
       points: latestTwelveColumns.map((column) => ({
         dateKey: column.dateKey,
         dateLabel: column.dateLabel,
@@ -266,20 +340,22 @@ export function parseAlgoWorkbook(workbooks: ParsedWorkbook[]): AlgoDashboardDat
 
   if (seriesRows.length === 0) {
     return buildEmptyAlgoDashboardData(
-      "The International_Opp_Value tab did not contain parsable country rows.",
+      algoContract.mode,
+      `The ${algoContract.sheetName} tab did not contain parsable ${algoContract.mode} rows.`,
     );
   }
 
   return {
     available: true,
+    mode: algoContract.mode,
     sourceFileName: workbook.fileName,
     latestDateKey: latestDateColumn?.dateKey,
     latestDateLabel: latestDateColumn?.dateLabel,
     trailingDateLabels: latestTwelveColumns.map((column) => column.dateLabel),
     rows: seriesRows,
-    latestCountrySignals: buildLatestCountrySignals(seriesRows),
+    latestSignals: buildLatestSignals(seriesRows),
     notes: [
-      "Algo rows are sourced from sheet rows 2 through 30 only.",
+      `Algo rows are sourced from ${algoContract.sheetName} rows ${algoContract.rowStartIndex + 1} through ${algoContract.rowEndIndex + 1} only.`,
       "Algo values are normalized to percentage weights.",
     ],
   };

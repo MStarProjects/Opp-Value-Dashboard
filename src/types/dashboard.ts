@@ -1,4 +1,5 @@
 import type { SourceRole } from "@/lib/data-sources";
+import type { SleeveId } from "@/lib/sleeves";
 import type { AlgoDashboardData } from "@/types/algo";
 import type { CanonicalHolding } from "@/types/holdings";
 import type {
@@ -52,6 +53,7 @@ export interface EnrichmentAudit {
 }
 
 export interface DashboardState {
+  sleeveId: SleeveId;
   asOfLabel?: string;
   morningstarAsOfLabel?: string;
   sources: SourceSnapshot[];
@@ -61,6 +63,7 @@ export interface DashboardState {
   summary: PortfolioSummaryMetrics;
   sectorExposure: ExposureRow[];
   countryExposure: ExposureRow[];
+  industryExposure: ExposureRow[];
   moatDistribution: DistributionRow[];
   pfvDistribution: DistributionRow[];
   valuationBySector: Array<{
